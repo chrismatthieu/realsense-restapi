@@ -151,8 +151,9 @@ DELETE /api/webrtc/sessions/{session_id}
 - **Resolutions**: 1920x1080, 1280x720, 640x480, etc.
 - **Use Case**: Video streaming, computer vision
 
-### Infrared Stream
+### Infrared Streams
 - **Sensor**: Stereo Module
+- **Stream Types**: infrared-1, infrared-2
 - **Format**: y16, y8
 - **Resolutions**: 1280x800, 1280x720, 848x480, etc.
 - **Use Case**: Low-light conditions, depth processing
@@ -169,6 +170,7 @@ DELETE /api/webrtc/sessions/{session_id}
 2. **Stream Start Fails**:
    - Check sensor ID format: `{device_id}-sensor-{index}`
    - Verify stream type is supported by the sensor
+   - Note: Infrared streams are named `infrared-1` and `infrared-2`, not just `infrared`
    - Check resolution and framerate compatibility
 
 3. **WebRTC Connection Fails**:

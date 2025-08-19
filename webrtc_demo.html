@@ -104,7 +104,8 @@
             <select id="streamType">
                 <option value="color">Color</option>
                 <option value="depth">Depth</option>
-                <option value="infrared">Infrared</option>
+                <option value="infrared-1">Infrared 1</option>
+                <option value="infrared-2">Infrared 2</option>
             </select>
             <br>
             <button onclick="startStream()">Start Stream</button>
@@ -159,12 +160,20 @@
 
                 // Step 1: Start the device stream first
                 logMessage('Starting device stream...');
-                // Determine the correct sensor ID based on stream type
+                // Determine the correct sensor ID and format based on stream type
                 let sensorId;
+                let format;
+                
                 if (streamType.value === 'color') {
                     sensorId = `${deviceId.value}-sensor-1`; // RGB Camera
+                    format = 'rgb8';
                 } else {
-                    sensorId = `${deviceId.value}-sensor-0`; // Stereo Module (depth, infrared)
+                    sensorId = `${deviceId.value}-sensor-0`; // Stereo Module (depth, infrared-1, infrared-2)
+                    if (streamType.value === 'depth') {
+                        format = 'z16';
+                    } else {
+                        format = 'y8'; // infrared streams use y8 or y16 format
+                    }
                 }
 
                 const streamConfig = {
@@ -172,7 +181,7 @@
                         {
                             sensor_id: sensorId,
                             stream_type: streamType.value,
-                            format: streamType.value === 'depth' ? 'z16' : 'rgb8',
+                            format: format,
                             resolution: { width: 640, height: 480 },
                             framerate: 30
                         }
