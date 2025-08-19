@@ -57,6 +57,14 @@ async def webrtc_demo():
     else:
         return {"message": "WebRTC demo not found. Please ensure webrtc_demo.html exists in the root directory."}
 
+@app.get("/webrtc_3d_pointcloud_demo.html")
+async def webrtc_3d_pointcloud_demo():
+    """Serve the 3D point cloud demo page directly."""
+    if os.path.exists("webrtc_3d_pointcloud_demo.html"):
+        return FileResponse("webrtc_3d_pointcloud_demo.html")
+    else:
+        return {"message": "3D point cloud demo not found. Please ensure webrtc_3d_pointcloud_demo.html exists in the root directory."}
+
 
 # --- Combine FastAPI and Socket.IO into a single ASGI App ---
 # Mount the Socket.IO app (`sio`) onto the FastAPI app (`app`)

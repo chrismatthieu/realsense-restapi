@@ -186,3 +186,53 @@ async def get_stream_references(
         return await webrtc_manager.get_stream_reference_info()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/pointcloud-data/{device_id}", response_model=Dict[str, Any])
+async def get_pointcloud_data(
+    device_id: str = Path(..., description="The device ID to get point cloud data from"),
+    webrtc_manager: WebRTCManager = Depends(get_webrtc_manager),
+):
+    """
+    Get raw point cloud data for 3D rendering.
+    This endpoint provides the actual 3D vertex data that can be used
+    to create interactive 3D visualizations in the browser.
+    """
+    try:
+        # Get the RealSense manager from the WebRTC manager
+        realsense_manager = webrtc_manager.realsense_manager
+        
+        # Get the latest point cloud data
+        try:
+            # Get depth frame metadata which contains point cloud data
+            metadata = realsense_manager.get_latest_metadata(device_id, "depth")
+            
+            if "point_cloud" in metadata and metadata["point_cloud"]["vertices"] is not None:
+                vertices = metadata["point_cloud"]["vertices"]
+                
+                # Convert numpy array to list for JSON serialization
+                vertices_list = vertices.tolist() if hasattr(vertices, 'tolist') else vertices
+                
+                return {
+                    "success": True,
+                    "device_id": device_id,
+                    "vertices": vertices_list,
+                    "vertex_count": len(vertices_list),
+                    "timestamp": metadata.get("timestamp", 0),
+                    "frame_number": metadata.get("frame_number", 0)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "No point cloud data available",
+                    "device_id": device_id
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get point cloud data: {str(e)}",
+                "device_id": device_id
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to get point cloud data: {str(e)}")

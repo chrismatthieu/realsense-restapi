@@ -615,7 +615,7 @@ class RealSenseManager:
 
     def get_latest_frame(
         self, device_id: str, stream_type: str
-    ) -> Tuple[np.ndarray, dict]:
+    ) -> np.ndarray:
         """Get the latest frame from a specific stream"""
         with self.lock:
             if device_id not in self.frame_queues:

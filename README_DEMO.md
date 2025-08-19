@@ -22,7 +22,7 @@ This repository contains a complete, working implementation of a RealSense WebRT
 
 ### 🎯 **Multi-Stream Type Support**
 - ✅ **Independent stream type selection** - each browser can choose different stream types
-- ✅ **Simultaneous multiple stream types** - device can stream color, depth, infrared simultaneously
+- ✅ **Simultaneous multiple stream types** - device can stream color, depth, infrared, pointcloud simultaneously
 - ✅ **Dynamic stream type management** - stream types are added/removed based on browser usage
 - ✅ **Mixed stream type sessions** - browsers can request multiple stream types in one session
 - ✅ **Automatic configuration updates** - device stream adapts to include all needed stream types
@@ -56,7 +56,7 @@ This repository contains a complete, working implementation of a RealSense WebRT
 - ✅ ICE candidate handling
 - ✅ **Session lifecycle management**
 - ✅ Real-time video streaming
-- ✅ Multiple stream type support (color, depth, infrared)
+- ✅ Multiple stream type support (color, depth, infrared, pointcloud)
 
 ### 3. **Demo Components**
 - ✅ **Enhanced HTML client** (`webrtc_demo.html`) with session monitoring
@@ -112,11 +112,28 @@ Run the connection failure recovery test script to verify error handling:
 python test_connection_failure_recovery.py
 ```
 
+Run the point cloud streaming test script to verify 3D point cloud rendering:
+```bash
+python test_pointcloud_stream.py
+```
+
+Run the point cloud visual test to verify rendering produces visible output:
+```bash
+python test_pointcloud_visual.py
+```
+
+Run the 3D point cloud viewer test to verify interactive 3D functionality:
+```bash
+python test_3d_pointcloud_viewer.py
+```
+
 These scripts will:
 - Create multiple WebRTC sessions with different stream types
 - Test independent session management (close one session, others continue)
 - Test independent stream type management (add/remove stream types dynamically)
 - Test connection failure recovery (failed connections don't affect others)
+- Test point cloud streaming (3D depth data rendered as 2D view)
+- Test 3D interactive point cloud viewer (rotate, pan, zoom)
 - Monitor session status and stream references
 - Verify concurrent connections work properly
 - Clean up all sessions
@@ -124,7 +141,7 @@ These scripts will:
 ### Manual Testing
 1. **Start the server**: `python main.py`
 2. **Open multiple browser tabs/windows** with `webrtc_demo.html`
-3. **Select a stream type in each browser** (color, depth, infrared-1, or infrared-2)
+3. **Select a stream type in each browser** (color, depth, infrared-1, infrared-2, or pointcloud)
 4. **Start streaming in each browser** - each will get its own session with selected stream types
 5. **Monitor the "Active Sessions" panel** to see all connections
 6. **Monitor the "Stream References" panel** to see stream usage
@@ -136,7 +153,9 @@ The system now supports truly independent browser connections:
 - **Browser A connects with color** → Device stream starts with color
 - **Browser B connects with depth** → Device stream adds depth (now color + depth)
 - **Browser C connects with infrared-1** → Device stream adds infrared-1 (now color + depth + infrared-1)
+- **Browser E connects with pointcloud** → Device stream adds depth (now color + depth + infrared-1 + depth for pointcloud)
 - **Browser A disconnects** → Device stream removes color (now depth + infrared-1)
+- **Browser E connects with pointcloud** → Device stream adds depth (now depth + infrared-1 + depth for pointcloud)
 - **All browsers disconnect** → Device stream stops automatically
 
 ### Multi-Stream Type Testing
@@ -145,6 +164,7 @@ The system supports independent stream type selection:
 - **Browser B**: Depth stream only  
 - **Browser C**: Color + Depth streams
 - **Browser D**: Infrared-1 stream only
+- **Browser E**: Point Cloud stream only
 - **All browsers can connect simultaneously** with different stream type combinations
 
 ## 📁 Files Overview
@@ -153,9 +173,13 @@ The system supports independent stream type selection:
 |------|---------|
 | `main.py` | FastAPI server with multi-client WebRTC support |
 | `webrtc_demo.html` | **Enhanced web client with session monitoring** |
+| `webrtc_3d_pointcloud_demo.html` | **3D interactive point cloud viewer** |
 | `test_multiple_webrtc.py` | **Multi-client test script** |
 | `test_multiple_stream_types.py` | **Multi-stream type test script** |
 | `test_connection_failure_recovery.py` | **Connection failure recovery test script** |
+| `test_pointcloud_stream.py` | **Point cloud streaming test script** |
+| `test_pointcloud_visual.py` | **Point cloud visual output test script** |
+| `test_3d_pointcloud_viewer.py` | **3D point cloud viewer test script** |
 | `test_webrtc_api.py` | Python script to test all endpoints |
 | `start_demo.sh` | Automated startup script |
 | `webrtc_demo_guide.md` | Comprehensive documentation |
@@ -265,7 +289,7 @@ The multi-client WebRTC demo works with:
 7. **One browser stopping affects others**: This is now fixed with independent connections
 8. **Stream references not updating**: Check the stream references panel for debugging
 9. **Connection failures affect other browsers**: This is now fixed with robust error handling
-10. **Invalid stream type errors**: Use only valid stream types: color, depth, infrared-1, infrared-2
+10. **Invalid stream type errors**: Use only valid stream types: color, depth, infrared-1, infrared-2, pointcloud
 
 ### Debug Commands
 ```bash

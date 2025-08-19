@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealSense 3D Point Cloud Viewer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .control-group input, .control-group select {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-size: 14px;
+        }
+
+        .button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .status h3 {
+            margin-top: 0;
+            color: #ffd700;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            font-weight: bold;
+        }
+
+        .status-value {
+            color: #90EE90;
+        }
+
+        .status-value.error {
+            color: #ff6b6b;
+        }
+
+        .viewer-container {
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 15px;
+            padding: 20px;
+            height: 600px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #pointcloud-canvas {
+            width: 100%;
+            height: 100%;
+            border-radius: 10px;
+        }
+
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .instructions h3 {
+            color: #ffd700;
+            margin-top: 0;
+        }
+
+        .instructions ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #ffd700;
+        }
+
+        .point-count {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 RealSense 3D Point Cloud Viewer</h1>
+            <p>Interactive 3D visualization of RealSense depth data</p>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="apiUrl">API URL:</label>
+                <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="Enter API URL">
+            </div>
+            <div class="control-group">
+                <label for="deviceId">Device ID:</label>
+                <input type="text" id="deviceId" placeholder="Enter device ID (e.g., 844212070924)">
+            </div>
+            <button class="button" onclick="discoverDevices()">🔍 Discover Devices</button>
+            <button class="button" onclick="startPointCloudViewer()">🚀 Start 3D Viewer</button>
+            <button class="button" onclick="stopPointCloudViewer()">⏹️ Stop Viewer</button>
+        </div>
+
+        <div class="status">
+            <h3>📊 Status</h3>
+            <div class="status-item">
+                <span class="status-label">Connection:</span>
+                <span class="status-value" id="connectionStatus">Disconnected</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Point Cloud Data:</span>
+                <span class="status-value" id="pointCloudStatus">Not Available</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Vertex Count:</span>
+                <span class="status-value" id="vertexCount">0</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Frame Rate:</span>
+                <span class="status-value" id="frameRate">0 FPS</span>
+            </div>
+        </div>
+
+        <div class="viewer-container">
+            <div id="loading" class="loading">Loading 3D viewer...</div>
+            <div id="pointCount" class="point-count" style="display: none;">Points: 0</div>
+            <canvas id="pointcloud-canvas"></canvas>
+        </div>
+
+        <div class="instructions">
+            <h3>🎮 Controls</h3>
+            <ul>
+                <li><strong>Mouse Left Click + Drag:</strong> Rotate the point cloud</li>
+                <li><strong>Mouse Right Click + Drag:</strong> Pan the view</li>
+                <li><strong>Mouse Wheel:</strong> Zoom in/out</li>
+                <li><strong>Double Click:</strong> Reset view to default</li>
+                <li><strong>R Key:</strong> Reset camera position</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // Global variables
+        let scene, camera, renderer, controls;
+        let pointCloud, pointCloudGeometry, pointCloudMaterial;
+        let animationId;
+        let isViewerRunning = false;
+        let frameCount = 0;
+        let lastTime = performance.now();
+
+        // Initialize Three.js scene
+        function initThreeJS() {
+            const canvas = document.getElementById('pointcloud-canvas');
+            
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+            camera.position.set(0, 0, 5);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Create controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 0.1;
+            controls.maxDistance = 50;
+
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+
+            // Add directional light
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Hide loading message
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function onWindowResize() {
+            const canvas = document.getElementById('pointcloud-canvas');
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+        }
+
+        function animate() {
+            animationId = requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+            
+            // Calculate FPS
+            frameCount++;
+            const currentTime = performance.now();
+            if (currentTime - lastTime >= 1000) {
+                const fps = Math.round((frameCount * 1000) / (currentTime - lastTime));
+                document.getElementById('frameRate').textContent = `${fps} FPS`;
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+        }
+
+        async function discoverDevices() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const deviceIdInput = document.getElementById('deviceId');
+            
+            try {
+                document.getElementById('connectionStatus').textContent = 'Discovering...';
+                document.getElementById('connectionStatus').className = 'status-value';
+                
+                const response = await fetch(`${apiUrl}/devices/`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const devices = await response.json();
+                
+                if (devices.length > 0) {
+                    deviceIdInput.value = devices[0].device_id;
+                    document.getElementById('connectionStatus').textContent = `Found ${devices.length} device(s)`;
+                    document.getElementById('connectionStatus').className = 'status-value';
+                } else {
+                    document.getElementById('connectionStatus').textContent = 'No devices found';
+                    document.getElementById('connectionStatus').className = 'status-value error';
+                }
+            } catch (error) {
+                console.error('Error discovering devices:', error);
+                document.getElementById('connectionStatus').textContent = 'Discovery failed';
+                document.getElementById('connectionStatus').className = 'status-value error';
+            }
+        }
+
+        async function startPointCloudViewer() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const deviceId = document.getElementById('deviceId').value;
+            
+            if (!deviceId) {
+                alert('Please enter a device ID');
+                return;
+            }
+
+            try {
+                // Initialize Three.js if not already done
+                if (!scene) {
+                    initThreeJS();
+                }
+
+                // Clear existing point cloud
+                if (pointCloud) {
+                    scene.remove(pointCloud);
+                    pointCloudGeometry.dispose();
+                    pointCloudMaterial.dispose();
+                }
+
+                isViewerRunning = true;
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').className = 'status-value';
+                document.getElementById('pointCloudStatus').textContent = 'Loading...';
+
+                // Start animation loop
+                if (!animationId) {
+                    animate();
+                }
+
+                // Start fetching point cloud data
+                fetchPointCloudData(apiUrl, deviceId);
+
+            } catch (error) {
+                console.error('Error starting point cloud viewer:', error);
+                document.getElementById('connectionStatus').textContent = 'Failed to start';
+                document.getElementById('connectionStatus').className = 'status-value error';
+            }
+        }
+
+        async function fetchPointCloudData(apiUrl, deviceId) {
+            while (isViewerRunning) {
+                try {
+                    const response = await fetch(`${apiUrl}/webrtc/pointcloud-data/${deviceId}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data.success && data.vertices) {
+                        updatePointCloud(data.vertices);
+                        document.getElementById('pointCloudStatus').textContent = 'Active';
+                        document.getElementById('vertexCount').textContent = data.vertex_count;
+                        document.getElementById('pointCount').style.display = 'block';
+                        document.getElementById('pointCount').textContent = `Points: ${data.vertex_count}`;
+                    } else {
+                        document.getElementById('pointCloudStatus').textContent = 'No data';
+                        document.getElementById('vertexCount').textContent = '0';
+                    }
+                } catch (error) {
+                    console.error('Error fetching point cloud data:', error);
+                    document.getElementById('pointCloudStatus').textContent = 'Error';
+                    document.getElementById('pointCloudStatus').className = 'status-value error';
+                }
+                
+                // Wait before next fetch
+                await new Promise(resolve => setTimeout(resolve, 100)); // 10 FPS
+            }
+        }
+
+        function updatePointCloud(vertices) {
+            // Remove existing point cloud
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloudGeometry.dispose();
+                pointCloudMaterial.dispose();
+            }
+
+            // Create geometry from vertices
+            pointCloudGeometry = new THREE.BufferGeometry();
+            
+            // Convert vertices to Float32Array
+            const positions = new Float32Array(vertices.length * 3);
+            const colors = new Float32Array(vertices.length * 3);
+            
+            for (let i = 0; i < vertices.length; i++) {
+                const vertex = vertices[i];
+                const index = i * 3;
+                
+                // Position
+                positions[index] = vertex[0];     // X
+                positions[index + 1] = vertex[1]; // Y
+                positions[index + 2] = vertex[2]; // Z
+                
+                // Color based on depth (Z coordinate)
+                const depth = Math.max(0, Math.min(1, (vertex[2] + 2) / 4)); // Normalize Z to 0-1
+                colors[index] = depth;           // Red (far)
+                colors[index + 1] = 0;           // Green
+                colors[index + 2] = 1 - depth;   // Blue (close)
+            }
+            
+            pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            pointCloudGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Create material
+            pointCloudMaterial = new THREE.PointsMaterial({
+                size: 0.02,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            // Create point cloud
+            pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial);
+            scene.add(pointCloud);
+
+            // Adjust camera to fit point cloud
+            const box = new THREE.Box3().setFromObject(pointCloud);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            
+            camera.position.set(center.x, center.y, center.z + cameraZ * 1.5);
+            camera.lookAt(center);
+            controls.target.copy(center);
+            controls.update();
+        }
+
+        function stopPointCloudViewer() {
+            isViewerRunning = false;
+            
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
+            document.getElementById('connectionStatus').textContent = 'Disconnected';
+            document.getElementById('connectionStatus').className = 'status-value';
+            document.getElementById('pointCloudStatus').textContent = 'Stopped';
+            document.getElementById('vertexCount').textContent = '0';
+            document.getElementById('pointCount').style.display = 'none';
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'r' || event.key === 'R') {
+                if (pointCloud) {
+                    const box = new THREE.Box3().setFromObject(pointCloud);
+                    const center = box.getCenter(new THREE.Vector3());
+                    const size = box.getSize(new THREE.Vector3());
+                    
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    const fov = camera.fov * (Math.PI / 180);
+                    let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+                    
+                    camera.position.set(center.x, center.y, center.z + cameraZ * 1.5);
+                    camera.lookAt(center);
+                    controls.target.copy(center);
+                    controls.update();
+                }
+            }
+        });
+
+        // Initialize on page load
+        window.addEventListener('load', function() {
+            // Auto-discover devices
+            setTimeout(discoverDevices, 1000);
+        });
+    </script>
+</body>
+</html>

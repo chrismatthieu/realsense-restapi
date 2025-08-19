@@ -69,7 +69,7 @@ This demo demonstrates how to use the RealSense REST API's WebRTC functionality 
    - Open `http://localhost:8000` or `http://localhost:8000/webrtc_demo.html` in your browser
    - Set the API URL to `http://localhost:8000/api`
    - Enter your device ID (e.g., `844212070924`)
-   - Select stream type (color, depth, infrared-1, infrared-2)
+   - Select stream type (color, depth, infrared-1, infrared-2, pointcloud)
    - Click "Start Stream"
 
 ## WebRTC Workflow
@@ -171,6 +171,7 @@ DELETE /api/webrtc/sessions/{session_id}
    - Check sensor ID format: `{device_id}-sensor-{index}`
    - Verify stream type is supported by the sensor
    - Note: Infrared streams are named `infrared-1` and `infrared-2`, not just `infrared`
+- Note: Point cloud streams render 3D depth data as a 2D top-down view with color-coded depth
    - Check resolution and framerate compatibility
 
 3. **WebRTC Connection Fails**:

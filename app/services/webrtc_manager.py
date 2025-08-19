@@ -64,6 +64,107 @@ class RealSenseVideoTrack(VideoStreamTrack):
             print(f"Error getting frame for session {self.session_id}: {str(e)}")
             return video_frame
 
+class PointCloudVideoTrack(VideoStreamTrack):
+    """Video track that sends point cloud data for 3D rendering."""
+
+    def __init__(self, realsense_manager, device_id, stream_type, session_id=None):
+        super().__init__()
+        self.realsense_manager = realsense_manager
+        self.device_id = device_id
+        self.stream_type = stream_type
+        self.session_id = session_id
+        self._start = time.time()
+        self._frame_count = 0
+        self._last_frame_time = time.time()
+
+    async def recv(self):
+        try:
+            # Get frame from RealSense (this will be depth frame)
+            frame_data = self.realsense_manager.get_latest_frame(self.device_id, "depth")
+            
+            # Get metadata separately to check for point cloud data
+            try:
+                metadata = self.realsense_manager.get_latest_metadata(self.device_id, "depth")
+                # Check if point cloud data is available
+                if "point_cloud" in metadata and metadata["point_cloud"]["vertices"] is not None:
+                    # Create a visualization frame with point cloud data encoded
+                    img = self._create_point_cloud_visualization(metadata["point_cloud"]["vertices"])
+                else:
+                    # Fallback to depth frame if no point cloud data
+                    img = frame_data
+            except Exception as e:
+                # If metadata is not available, use depth frame
+                print(f"Warning: Could not get metadata for point cloud: {str(e)}")
+                img = frame_data
+            
+            # Convert to RGB format if necessary
+            if len(img.shape) == 3 and img.shape[2] == 3:
+                # Already RGB, no conversion needed
+                pass
+            else:
+                # Convert to RGB
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Create VideoFrame
+            video_frame = VideoFrame.from_ndarray(img, format="rgb24")
+
+            # Set frame timestamp
+            pts, time_base = await self.next_timestamp()
+            video_frame.pts = pts
+            video_frame.time_base = time_base
+
+            # Update frame statistics
+            self._frame_count += 1
+            self._last_frame_time = time.time()
+
+            return video_frame
+        except Exception as e:
+            # On error, return a black frame
+            width, height = 640, 480  # Default size
+            img = np.zeros((height, width, 3), dtype=np.uint8)
+            video_frame = VideoFrame.from_ndarray(img, format="rgb24")
+            pts, time_base = await self.next_timestamp()
+            video_frame.pts = pts
+            video_frame.time_base = time_base
+
+            print(f"Error getting point cloud frame for session {self.session_id}: {str(e)}")
+            return video_frame
+
+    def _create_point_cloud_visualization(self, vertices):
+        """Create a visualization frame that encodes point cloud data for 3D rendering."""
+        if vertices is None or len(vertices) == 0:
+            # Return black image if no vertices
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Create a visualization that shows point cloud info
+        width, height = 640, 480
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        
+        # Add text overlay with point cloud information
+        text_lines = [
+            f"Point Cloud: {len(vertices)} vertices",
+            "3D Interactive View Available",
+            "Use mouse to rotate/zoom",
+            "Loading 3D data..."
+        ]
+        
+        y_offset = 50
+        for i, line in enumerate(text_lines):
+            y = y_offset + i * 30
+            # Add text with white color
+            cv2.putText(img, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Add a simple 3D-like visualization (placeholder)
+        # This will be replaced by the actual 3D rendering in the browser
+        center_x, center_y = width // 2, height // 2
+        radius = 100
+        
+        # Draw a circle to indicate 3D content
+        cv2.circle(img, (center_x, center_y), radius, (0, 255, 255), 3)
+        cv2.putText(img, "3D", (center_x - 20, center_y + 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        
+        return img
+
 class WebRTCManager:
     def __init__(self, realsense_manager):
         self.realsense_manager = realsense_manager
@@ -104,7 +205,7 @@ class WebRTCManager:
             new_stream_configs = []
             
             # Validate stream types before processing
-            valid_stream_types = ["color", "depth", "infrared-1", "infrared-2"]
+            valid_stream_types = ["color", "depth", "infrared-1", "infrared-2", "pointcloud"]
             for stream_type in stream_types:
                 if stream_type not in valid_stream_types:
                     raise RealSenseError(
@@ -118,17 +219,36 @@ class WebRTCManager:
                     need_to_start_stream = True
                     
                     # Create stream config
-                    stream_config = {
-                        "sensor_id": f"{device_id}-sensor-0",
-                        "stream_type": stream_type,
-                        "format": "z16" if stream_type == "depth" else "y8" if stream_type.startswith("infrared") else "rgb8",
-                        "resolution": {"width": 640, "height": 480},
-                        "framerate": 30
-                    }
+                    if stream_type == "pointcloud":
+                        # For pointcloud, we only need the depth stream
+                        stream_config = {
+                            "sensor_id": f"{device_id}-sensor-0",
+                            "stream_type": "depth",  # Use depth stream for pointcloud
+                            "format": "z16",
+                            "resolution": {"width": 640, "height": 480},
+                            "framerate": 30
+                        }
+                    else:
+                        stream_config = {
+                            "sensor_id": f"{device_id}-sensor-0",
+                            "stream_type": stream_type,
+                            "format": "z16" if stream_type == "depth" else "y8" if stream_type.startswith("infrared") else "rgb8",
+                            "resolution": {"width": 640, "height": 480},
+                            "framerate": 30
+                        }
                     new_stream_configs.append(stream_config)
                 
                 # Increment reference count
-                self.stream_references[device_id][stream_type] += 1
+                if stream_type == "pointcloud":
+                    # For pointcloud, increment both pointcloud and depth reference counts
+                    if "pointcloud" not in self.stream_references[device_id]:
+                        self.stream_references[device_id]["pointcloud"] = 0
+                    if "depth" not in self.stream_references[device_id]:
+                        self.stream_references[device_id]["depth"] = 0
+                    self.stream_references[device_id]["pointcloud"] += 1
+                    self.stream_references[device_id]["depth"] += 1
+                else:
+                    self.stream_references[device_id][stream_type] += 1
             
             # Handle device stream configuration
             if need_to_start_stream:
@@ -168,6 +288,10 @@ class WebRTCManager:
                         self.realsense_manager.stop_stream(device_id)
                         self.realsense_manager.start_stream(device_id, stream_configs)
                         
+                        # Enable point cloud processing if pointcloud stream is requested
+                        if any(config["stream_type"] == "pointcloud" for config in existing_configs):
+                            self.realsense_manager.activate_point_cloud(device_id, True)
+                        
                         # Update stored configuration
                         self.device_stream_configs[device_id] = {
                             "configs": existing_configs,
@@ -202,7 +326,25 @@ class WebRTCManager:
             removed_stream_types = []
             
             for stream_type in stream_types:
-                if stream_type in self.stream_references[device_id]:
+                if stream_type == "pointcloud":
+                    # For pointcloud, decrement both pointcloud and depth reference counts
+                    if "pointcloud" in self.stream_references[device_id]:
+                        self.stream_references[device_id]["pointcloud"] -= 1
+                        if self.stream_references[device_id]["pointcloud"] <= 0:
+                            del self.stream_references[device_id]["pointcloud"]
+                    
+                    if "depth" in self.stream_references[device_id]:
+                        self.stream_references[device_id]["depth"] -= 1
+                        
+                        # If depth still has references, don't stop device stream
+                        if self.stream_references[device_id]["depth"] > 0:
+                            should_stop_device_stream = False
+                        
+                        # Clean up zero references
+                        if self.stream_references[device_id]["depth"] <= 0:
+                            del self.stream_references[device_id]["depth"]
+                            removed_stream_types.append("depth")
+                elif stream_type in self.stream_references[device_id]:
                     self.stream_references[device_id][stream_type] -= 1
                     
                     # If any stream type still has references, don't stop device stream
@@ -245,6 +387,10 @@ class WebRTCManager:
                         # Restart device stream with updated configuration
                         self.realsense_manager.stop_stream(device_id)
                         self.realsense_manager.start_stream(device_id, stream_configs)
+                        
+                        # Disable point cloud processing if no pointcloud streams remain
+                        if not any(config["stream_type"] == "pointcloud" for config in updated_configs):
+                            self.realsense_manager.activate_point_cloud(device_id, False)
                         
                         # Update stored configuration
                         self.device_stream_configs[device_id] = {
@@ -338,7 +484,14 @@ class WebRTCManager:
 
             # Verify requested stream types are available
             for stream_type in stream_types:
-                if stream_type not in stream_status.active_streams:
+                if stream_type == "pointcloud":
+                    # For pointcloud, check if depth stream is available
+                    if "depth" not in stream_status.active_streams:
+                        # Rollback reference counts if depth stream is not available
+                        await self._decrement_stream_references(device_id, stream_types)
+                        references_added = False
+                        raise RealSenseError(status_code=400, detail=f"Depth stream is not active (required for pointcloud)")
+                elif stream_type not in stream_status.active_streams:
                     # Rollback reference counts if stream type is not available
                     await self._decrement_stream_references(device_id, stream_types)
                     references_added = False
@@ -353,7 +506,12 @@ class WebRTCManager:
             # Add video tracks for each stream type
             video_tracks = []
             for stream_type in stream_types:
-                video_track = RealSenseVideoTrack(self.realsense_manager, device_id, stream_type, session_id)
+                if stream_type == "pointcloud":
+                    # Use special point cloud video track
+                    video_track = PointCloudVideoTrack(self.realsense_manager, device_id, stream_type, session_id)
+                else:
+                    # Use regular video track
+                    video_track = RealSenseVideoTrack(self.realsense_manager, device_id, stream_type, session_id)
                 pc.addTrack(video_track)
                 video_tracks.append(video_track)
 
