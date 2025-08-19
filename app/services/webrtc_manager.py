@@ -121,7 +121,7 @@ class WebRTCManager:
                     stream_config = {
                         "sensor_id": f"{device_id}-sensor-0",
                         "stream_type": stream_type,
-                        "format": "z16" if stream_type == "depth" else "rgb8",
+                        "format": "z16" if stream_type == "depth" else "y8" if stream_type.startswith("infrared") else "rgb8",
                         "resolution": {"width": 640, "height": 480},
                         "framerate": 30
                     }

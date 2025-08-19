@@ -33,19 +33,27 @@ async def create_offer(
         }
     except Exception as e:
         # Log the error for debugging
-        print(f"Error creating WebRTC offer: {str(e)}")
+        print(f"Error creating WebRTC offer: {type(e).__name__}: {str(e)}")
         
-        # Return a more informative error message
-        if "Failed to start device stream" in str(e):
-            raise HTTPException(status_code=400, detail=f"Failed to start device stream: {str(e)}")
-        elif "Stream type" in str(e) and "not active" in str(e):
-            raise HTTPException(status_code=400, detail=f"Stream type not available: {str(e)}")
-        elif "Device" in str(e) and "not streaming" in str(e):
-            raise HTTPException(status_code=400, detail=f"Device not streaming: {str(e)}")
-        elif "Maximum concurrent sessions" in str(e):
-            raise HTTPException(status_code=429, detail=str(e))
+        # Handle RealSenseError specifically
+        if hasattr(e, 'detail') and hasattr(e, 'status_code'):
+            # This is a RealSenseError
+            raise HTTPException(status_code=e.status_code, detail=e.detail)
+        
+        # Return a more informative error message for other exceptions
+        error_message = str(e)
+        if "Failed to start device stream" in error_message:
+            raise HTTPException(status_code=400, detail=f"Failed to start device stream: {error_message}")
+        elif "Stream type" in error_message and "not active" in error_message:
+            raise HTTPException(status_code=400, detail=f"Stream type not available: {error_message}")
+        elif "Device" in error_message and "not streaming" in error_message:
+            raise HTTPException(status_code=400, detail=f"Device not streaming: {error_message}")
+        elif "Maximum concurrent sessions" in error_message:
+            raise HTTPException(status_code=429, detail=error_message)
+        elif "Invalid stream type" in error_message:
+            raise HTTPException(status_code=400, detail=error_message)
         else:
-            raise HTTPException(status_code=400, detail=f"Failed to create WebRTC offer: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Failed to create WebRTC offer: {error_message}")
 
 @router.post("/answer", response_model=dict)
 async def process_answer(

@@ -518,12 +518,27 @@
                 updateStatus('WebRTC connection setup complete', 'success');
 
             } catch (error) {
-                logMessage(`Error: ${error.message}`);
-                updateStatus(`Connection failed: ${error.message}`, 'error');
+                let errorMessage = error.message;
+                
+                // Try to extract more detailed error information
+                if (error.response) {
+                    try {
+                        const errorData = await error.response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        // If we can't parse JSON, use the original message
+                    }
+                }
+                
+                logMessage(`Error: ${errorMessage}`);
+                updateStatus(`Connection failed: ${errorMessage}`, 'error');
                 
                 // If this was a connection failure, refresh sessions to show current state
                 setTimeout(() => {
                     refreshSessions();
+                    refreshStreamReferences();
                 }, 1000);
             }
         }
