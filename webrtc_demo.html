@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealSense WebRTC Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .video-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        video {
+            width: 400px;
+            height: 300px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            background: #000;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        select, input {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>RealSense WebRTC Demo</h1>
+    
+    <div class="container">
+        <h2>Connection Setup</h2>
+        <div class="controls">
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="http://localhost:8000/api" style="width: 300px;">
+            <br>
+            <label for="deviceId">Device ID:</label>
+            <input type="text" id="deviceId" value="device1" placeholder="Enter device ID">
+            <br>
+            <label for="streamType">Stream Type:</label>
+            <select id="streamType">
+                <option value="color">Color</option>
+                <option value="depth">Depth</option>
+                <option value="infrared">Infrared</option>
+            </select>
+            <br>
+            <button onclick="startStream()">Start Stream</button>
+            <button onclick="stopStream()" disabled id="stopBtn">Stop Stream</button>
+        </div>
+        <div id="status" class="status info">Ready to connect</div>
+    </div>
+
+    <div class="container">
+        <h2>Video Stream</h2>
+        <div class="video-container">
+            <div>
+                <h3>RealSense Stream</h3>
+                <video id="videoElement" autoplay playsinline></video>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Connection Log</h2>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        let peerConnection = null;
+        let sessionId = null;
+        let isConnected = false;
+
+        const apiUrl = document.getElementById('apiUrl');
+        const deviceId = document.getElementById('deviceId');
+        const streamType = document.getElementById('streamType');
+        const videoElement = document.getElementById('videoElement');
+        const status = document.getElementById('status');
+        const log = document.getElementById('log');
+        const stopBtn = document.getElementById('stopBtn');
+
+        function logMessage(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `[${timestamp}] ${message}\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function updateStatus(message, type = 'info') {
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        async function startStream() {
+            try {
+                updateStatus('Starting stream and WebRTC connection...', 'info');
+                logMessage('Starting stream and WebRTC connection...');
+
+                // Step 1: Start the device stream first
+                logMessage('Starting device stream...');
+                // Determine the correct sensor ID based on stream type
+                let sensorId;
+                if (streamType.value === 'color') {
+                    sensorId = `${deviceId.value}-sensor-1`; // RGB Camera
+                } else {
+                    sensorId = `${deviceId.value}-sensor-0`; // Stereo Module (depth, infrared)
+                }
+
+                const streamConfig = {
+                    configs: [
+                        {
+                            sensor_id: sensorId,
+                            stream_type: streamType.value,
+                            format: streamType.value === 'depth' ? 'z16' : 'rgb8',
+                            resolution: { width: 640, height: 480 },
+                            framerate: 30
+                        }
+                    ]
+                };
+
+                const streamResponse = await fetch(`${apiUrl.value}/devices/${deviceId.value}/stream/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(streamConfig)
+                });
+
+                if (!streamResponse.ok) {
+                    const errorText = await streamResponse.text();
+                    throw new Error(`Failed to start stream: ${streamResponse.statusText} - ${errorText}`);
+                }
+
+                logMessage('Device stream started successfully');
+
+                // Step 2: Create WebRTC offer
+                logMessage('Creating WebRTC offer...');
+                const offerResponse = await fetch(`${apiUrl.value}/webrtc/offer`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        device_id: deviceId.value,
+                        stream_types: [streamType.value]
+                    })
+                });
+
+                if (!offerResponse.ok) {
+                    const errorText = await offerResponse.text();
+                    throw new Error(`Failed to create offer: ${offerResponse.statusText} - ${errorText}`);
+                }
+
+                const offerData = await offerResponse.json();
+                sessionId = offerData.session_id;
+                logMessage(`Offer created with session ID: ${sessionId}`);
+
+                // Step 2: Create RTCPeerConnection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Step 3: Set up event handlers
+                peerConnection.ontrack = (event) => {
+                    logMessage('Received remote track');
+                    if (event.streams && event.streams[0]) {
+                        videoElement.srcObject = event.streams[0];
+                    }
+                };
+
+                peerConnection.onicecandidate = async (event) => {
+                    if (event.candidate) {
+                        logMessage('Sending ICE candidate...');
+                        try {
+                            await fetch(`${apiUrl.value}/webrtc/ice-candidates`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    session_id: sessionId,
+                                    candidate: event.candidate.candidate,
+                                    sdpMid: event.candidate.sdpMid,
+                                    sdpMLineIndex: event.candidate.sdpMLineIndex
+                                })
+                            });
+                        } catch (error) {
+                            logMessage(`Error sending ICE candidate: ${error.message}`);
+                        }
+                    }
+                };
+
+                peerConnection.onconnectionstatechange = () => {
+                    logMessage(`Connection state: ${peerConnection.connectionState}`);
+                    if (peerConnection.connectionState === 'connected') {
+                        updateStatus('WebRTC connection established!', 'success');
+                        isConnected = true;
+                        stopBtn.disabled = false;
+                    } else if (peerConnection.connectionState === 'failed') {
+                        updateStatus('WebRTC connection failed', 'error');
+                    }
+                };
+
+                // Step 4: Set remote description (offer)
+                await peerConnection.setRemoteDescription({
+                    type: offerData.type,
+                    sdp: offerData.sdp
+                });
+
+                // Step 5: Create and send answer
+                logMessage('Creating answer...');
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                const answerResponse = await fetch(`${apiUrl.value}/webrtc/answer`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        sdp: answer.sdp,
+                        type: answer.type
+                    })
+                });
+
+                if (!answerResponse.ok) {
+                    throw new Error(`Failed to send answer: ${answerResponse.statusText}`);
+                }
+
+                logMessage('Answer sent successfully');
+                updateStatus('WebRTC connection setup complete', 'success');
+
+            } catch (error) {
+                logMessage(`Error: ${error.message}`);
+                updateStatus(`Connection failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopStream() {
+            try {
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+
+                if (sessionId) {
+                    logMessage('Closing WebRTC session...');
+                    await fetch(`${apiUrl.value}/webrtc/sessions/${sessionId}`, {
+                        method: 'DELETE'
+                    });
+                    sessionId = null;
+                }
+
+                // Stop the device stream
+                logMessage('Stopping device stream...');
+                try {
+                    await fetch(`${apiUrl.value}/devices/${deviceId.value}/stream/stop`, {
+                        method: 'POST'
+                    });
+                    logMessage('Device stream stopped successfully');
+                } catch (error) {
+                    logMessage(`Warning: Could not stop device stream: ${error.message}`);
+                }
+
+                videoElement.srcObject = null;
+                isConnected = false;
+                stopBtn.disabled = true;
+                updateStatus('Stream stopped', 'info');
+                logMessage('Stream stopped');
+
+            } catch (error) {
+                logMessage(`Error stopping stream: ${error.message}`);
+            }
+        }
+
+        // Initialize
+        logMessage('WebRTC Demo loaded. Ready to connect to RealSense API.');
+    </script>
+</body>
+</html>
