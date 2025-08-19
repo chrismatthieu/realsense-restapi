@@ -244,23 +244,7 @@
         .refresh-btn:hover {
             background-color: #545b62;
         }
-        .stream-type-checkboxes {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            margin-top: 5px;
-        }
-        .checkbox-label {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-weight: normal;
-            cursor: pointer;
-        }
-        .checkbox-label input[type="checkbox"] {
-            width: auto;
-            margin: 0;
-        }
+
     </style>
 </head>
 <body>
@@ -271,7 +255,7 @@
 
     <div class="container">
         <h2>📡 Connection Setup</h2>
-        <p><strong>💡 Independent Connections:</strong> Each browser creates its own WebRTC session. Stopping one browser's stream won't affect other browsers.</p>
+        <p><strong>💡 Independent Connections:</strong> Each browser creates its own WebRTC session with a single stream type. Stopping one browser's stream won't affect other browsers. To stream multiple types simultaneously, open multiple browser tabs.</p>
         <div class="form-group">
             <label for="apiUrl">API URL:</label>
             <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="http://localhost:8000/api">
@@ -281,21 +265,13 @@
             <input type="text" id="deviceId" placeholder="e.g., 844212070924">
         </div>
         <div class="form-group">
-            <label for="streamTypes">Stream Types:</label>
-            <div class="stream-type-checkboxes">
-                <label class="checkbox-label">
-                    <input type="checkbox" value="color" checked> Color
-                </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" value="depth"> Depth
-                </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" value="infrared-1"> Infrared 1
-                </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" value="infrared-2"> Infrared 2
-                </label>
-            </div>
+            <label for="streamType">Stream Type:</label>
+            <select id="streamType" class="form-control">
+                <option value="color" selected>Color</option>
+                <option value="depth">Depth</option>
+                <option value="infrared-1">Infrared 1</option>
+                <option value="infrared-2">Infrared 2</option>
+            </select>
         </div>
         
         <div class="controls">
@@ -326,10 +302,10 @@
     </div>
 
     <div class="container">
-        <h2>🎥 Video Streams</h2>
+        <h2>🎥 Video Stream</h2>
         <div id="videoContainer" class="video-container">
             <div class="video-wrapper">
-                <h3>Primary Stream</h3>
+                <h3>Current Stream</h3>
                 <video id="videoElement" autoplay playsinline muted></video>
                 <div id="videoStatus" class="status info">No video stream</div>
             </div>
@@ -356,8 +332,8 @@
         const sessionsPanel = document.getElementById('sessionsPanel');
 
         function getSelectedStreamTypes() {
-            const checkboxes = document.querySelectorAll('.stream-type-checkboxes input[type="checkbox"]:checked');
-            return Array.from(checkboxes).map(cb => cb.value);
+            const streamTypeSelect = document.getElementById('streamType');
+            return [streamTypeSelect.value];
         }
 
         function logMessage(message) {

@@ -124,7 +124,7 @@ These scripts will:
 ### Manual Testing
 1. **Start the server**: `python main.py`
 2. **Open multiple browser tabs/windows** with `webrtc_demo.html`
-3. **Select different stream types in each browser** (color, depth, infrared, or multiple)
+3. **Select a stream type in each browser** (color, depth, infrared-1, or infrared-2)
 4. **Start streaming in each browser** - each will get its own session with selected stream types
 5. **Monitor the "Active Sessions" panel** to see all connections
 6. **Monitor the "Stream References" panel** to see stream usage
@@ -135,8 +135,8 @@ These scripts will:
 The system now supports truly independent browser connections:
 - **Browser A connects with color** → Device stream starts with color
 - **Browser B connects with depth** → Device stream adds depth (now color + depth)
-- **Browser C connects with infrared** → Device stream adds infrared (now color + depth + infrared)
-- **Browser A disconnects** → Device stream removes color (now depth + infrared)
+- **Browser C connects with infrared-1** → Device stream adds infrared-1 (now color + depth + infrared-1)
+- **Browser A disconnects** → Device stream removes color (now depth + infrared-1)
 - **All browsers disconnect** → Device stream stops automatically
 
 ### Multi-Stream Type Testing
@@ -144,7 +144,7 @@ The system supports independent stream type selection:
 - **Browser A**: Color stream only
 - **Browser B**: Depth stream only  
 - **Browser C**: Color + Depth streams
-- **Browser D**: Infrared stream only
+- **Browser D**: Infrared-1 stream only
 - **All browsers can connect simultaneously** with different stream type combinations
 
 ## 📁 Files Overview

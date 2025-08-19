@@ -69,7 +69,7 @@ This demo demonstrates how to use the RealSense REST API's WebRTC functionality 
    - Open `http://localhost:8000` or `http://localhost:8000/webrtc_demo.html` in your browser
    - Set the API URL to `http://localhost:8000/api`
    - Enter your device ID (e.g., `844212070924`)
-   - Select stream type (color, depth, infrared)
+   - Select stream type (color, depth, infrared-1, infrared-2)
    - Click "Start Stream"
 
 ## WebRTC Workflow
