@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RealSense WebRTC Demo</title>
+    <title>RealSense WebRTC Multi-Client Demo</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -16,116 +16,328 @@
             background: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             margin-bottom: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .danger {
+            background-color: #dc3545;
+        }
+        .danger:hover {
+            background-color: #c82333;
+        }
+        .success {
+            background-color: #28a745;
+        }
+        .success:hover {
+            background-color: #218838;
         }
         .video-container {
             display: flex;
+            flex-wrap: wrap;
             gap: 20px;
             margin-top: 20px;
         }
+        .video-wrapper {
+            flex: 1;
+            min-width: 300px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+        }
+        .video-wrapper.active {
+            border-color: #28a745;
+        }
+        .video-wrapper h3 {
+            margin-top: 0;
+            color: #333;
+            font-size: 16px;
+        }
         video {
-            width: 400px;
-            height: 300px;
-            border: 2px solid #ddd;
+            width: 100%;
+            height: auto;
             border-radius: 4px;
             background: #000;
         }
-        button {
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            margin: 5px;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
         .status {
             padding: 10px;
-            margin: 10px 0;
             border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
         }
         .status.success {
-            background: #d4edda;
+            background-color: #d4edda;
             color: #155724;
             border: 1px solid #c3e6cb;
         }
         .status.error {
-            background: #f8d7da;
+            background-color: #f8d7da;
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
-        .status.info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
+        .status.warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
         }
         .log {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
             border-radius: 4px;
-            padding: 10px;
+            padding: 15px;
             height: 200px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .sessions-panel {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        .sessions-panel h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .session-item {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .session-item.connected {
+            border-color: #28a745;
+            background-color: #f8fff9;
+        }
+        .session-item.disconnected {
+            border-color: #dc3545;
+            background-color: #fff8f8;
+        }
+        .session-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .session-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+        }
+        .connection-status {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .connection-status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .connection-status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .device-refs {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .device-refs h4 {
+            margin-top: 0;
+            color: #333;
+            font-size: 14px;
+        }
+        .stream-ref {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+        }
+        .stream-ref.active {
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .stream-ref.inactive {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .stream-type {
+            font-weight: bold;
+            color: #333;
+        }
+        .ref-count {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
         }
         .controls {
-            margin: 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
         }
-        select, input {
-            padding: 8px;
-            margin: 5px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+        .refresh-btn {
+            background-color: #6c757d;
+        }
+        .refresh-btn:hover {
+            background-color: #545b62;
+        }
+        .stream-type-checkboxes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 5px;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: normal;
+            cursor: pointer;
+        }
+        .checkbox-label input[type="checkbox"] {
+            width: auto;
+            margin: 0;
         }
     </style>
 </head>
 <body>
-    <h1>RealSense WebRTC Demo</h1>
-    
+    <div class="header">
+        <h1>🎥 RealSense WebRTC Multi-Client Demo</h1>
+        <p>Stream RealSense camera data to multiple browsers simultaneously with independent connections</p>
+    </div>
+
     <div class="container">
-        <h2>Connection Setup</h2>
-        <div class="controls">
+        <h2>📡 Connection Setup</h2>
+        <p><strong>💡 Independent Connections:</strong> Each browser creates its own WebRTC session. Stopping one browser's stream won't affect other browsers.</p>
+        <div class="form-group">
             <label for="apiUrl">API URL:</label>
-            <input type="text" id="apiUrl" value="http://localhost:8000/api" style="width: 300px;">
-            <br>
-            <label for="deviceId">Device ID:</label>
-            <input type="text" id="deviceId" value="device1" placeholder="Enter device ID">
-            <br>
-            <label for="streamType">Stream Type:</label>
-            <select id="streamType">
-                <option value="color">Color</option>
-                <option value="depth">Depth</option>
-                <option value="infrared-1">Infrared 1</option>
-                <option value="infrared-2">Infrared 2</option>
-            </select>
-            <br>
-            <button onclick="startStream()">Start Stream</button>
-            <button onclick="stopStream()" disabled id="stopBtn">Stop Stream</button>
+            <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="http://localhost:8000/api">
         </div>
+        <div class="form-group">
+            <label for="deviceId">Device ID:</label>
+            <input type="text" id="deviceId" placeholder="e.g., 844212070924">
+        </div>
+        <div class="form-group">
+            <label for="streamTypes">Stream Types:</label>
+            <div class="stream-type-checkboxes">
+                <label class="checkbox-label">
+                    <input type="checkbox" value="color" checked> Color
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" value="depth"> Depth
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" value="infrared-1"> Infrared 1
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" value="infrared-2"> Infrared 2
+                </label>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button onclick="discoverDevices()">🔍 Discover Devices</button>
+            <button onclick="startStream()">▶️ Start WebRTC Session</button>
+            <button onclick="stopStream()" id="stopBtn" disabled>⏹️ Stop WebRTC Session</button>
+            <button onclick="refreshSessions()" class="refresh-btn">🔄 Refresh Sessions</button>
+            <button onclick="closeAllSessions()" class="danger">🗑️ Close All Sessions</button>
+        </div>
+
         <div id="status" class="status info">Ready to connect</div>
     </div>
 
     <div class="container">
-        <h2>Video Stream</h2>
-        <div class="video-container">
-            <div>
-                <h3>RealSense Stream</h3>
-                <video id="videoElement" autoplay playsinline></video>
+        <h2>📊 Active Sessions</h2>
+        <div id="sessionsPanel" class="sessions-panel">
+            <h3>No active sessions</h3>
+            <p>Start a stream to see active WebRTC sessions here.</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔗 Stream References</h2>
+        <div id="streamRefsPanel" class="sessions-panel">
+            <h3>No active stream references</h3>
+            <p>No device streams are currently active.</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🎥 Video Streams</h2>
+        <div id="videoContainer" class="video-container">
+            <div class="video-wrapper">
+                <h3>Primary Stream</h3>
+                <video id="videoElement" autoplay playsinline muted></video>
+                <div id="videoStatus" class="status info">No video stream</div>
             </div>
         </div>
     </div>
 
     <div class="container">
-        <h2>Connection Log</h2>
+        <h2>📝 Connection Log</h2>
         <div id="log" class="log"></div>
     </div>
 
@@ -133,14 +345,20 @@
         let peerConnection = null;
         let sessionId = null;
         let isConnected = false;
+        let sessionRefreshInterval = null;
 
         const apiUrl = document.getElementById('apiUrl');
         const deviceId = document.getElementById('deviceId');
-        const streamType = document.getElementById('streamType');
         const videoElement = document.getElementById('videoElement');
         const status = document.getElementById('status');
         const log = document.getElementById('log');
         const stopBtn = document.getElementById('stopBtn');
+        const sessionsPanel = document.getElementById('sessionsPanel');
+
+        function getSelectedStreamTypes() {
+            const checkboxes = document.querySelectorAll('.stream-type-checkboxes input[type="checkbox"]:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
 
         function logMessage(message) {
             const timestamp = new Date().toLocaleTimeString();
@@ -153,58 +371,49 @@
             status.className = `status ${type}`;
         }
 
+        async function discoverDevices() {
+            try {
+                logMessage('Discovering devices...');
+                updateStatus('Discovering devices...', 'info');
+
+                const response = await fetch(`${apiUrl.value}/devices/`);
+                if (!response.ok) {
+                    throw new Error(`Failed to discover devices: ${response.statusText}`);
+                }
+
+                const devices = await response.json();
+                logMessage(`Found ${devices.length} device(s)`);
+
+                if (devices.length > 0) {
+                    deviceId.value = devices[0].device_id;
+                    logMessage(`Auto-selected device: ${devices[0].device_id}`);
+                    updateStatus(`Found ${devices.length} device(s). Ready to stream.`, 'success');
+                } else {
+                    updateStatus('No devices found. Please connect a RealSense camera.', 'error');
+                }
+            } catch (error) {
+                logMessage(`Error discovering devices: ${error.message}`);
+                updateStatus(`Device discovery failed: ${error.message}`, 'error');
+            }
+        }
+
         async function startStream() {
             try {
-                updateStatus('Starting stream and WebRTC connection...', 'info');
-                logMessage('Starting stream and WebRTC connection...');
-
-                // Step 1: Start the device stream first
-                logMessage('Starting device stream...');
-                // Determine the correct sensor ID and format based on stream type
-                let sensorId;
-                let format;
-                
-                if (streamType.value === 'color') {
-                    sensorId = `${deviceId.value}-sensor-1`; // RGB Camera
-                    format = 'rgb8';
-                } else {
-                    sensorId = `${deviceId.value}-sensor-0`; // Stereo Module (depth, infrared-1, infrared-2)
-                    if (streamType.value === 'depth') {
-                        format = 'z16';
-                    } else {
-                        format = 'y8'; // infrared streams use y8 or y16 format
-                    }
+                if (!deviceId.value) {
+                    throw new Error('Please enter a device ID or discover devices first');
                 }
 
-                const streamConfig = {
-                    configs: [
-                        {
-                            sensor_id: sensorId,
-                            stream_type: streamType.value,
-                            format: format,
-                            resolution: { width: 640, height: 480 },
-                            framerate: 30
-                        }
-                    ]
-                };
+                updateStatus('Starting WebRTC stream...', 'info');
+                logMessage('Creating WebRTC session...');
 
-                const streamResponse = await fetch(`${apiUrl.value}/devices/${deviceId.value}/stream/start`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(streamConfig)
-                });
-
-                if (!streamResponse.ok) {
-                    const errorText = await streamResponse.text();
-                    throw new Error(`Failed to start stream: ${streamResponse.statusText} - ${errorText}`);
+                // Get selected stream types
+                const selectedStreamTypes = getSelectedStreamTypes();
+                if (selectedStreamTypes.length === 0) {
+                    throw new Error('Please select at least one stream type');
                 }
 
-                logMessage('Device stream started successfully');
-
-                // Step 2: Create WebRTC offer
-                logMessage('Creating WebRTC offer...');
+                // Create WebRTC offer (device stream will be managed automatically)
+                logMessage(`Creating WebRTC offer for stream types: ${selectedStreamTypes.join(', ')}`);
                 const offerResponse = await fetch(`${apiUrl.value}/webrtc/offer`, {
                     method: 'POST',
                     headers: {
@@ -212,7 +421,7 @@
                     },
                     body: JSON.stringify({
                         device_id: deviceId.value,
-                        stream_types: [streamType.value]
+                        stream_types: selectedStreamTypes
                     })
                 });
 
@@ -225,18 +434,20 @@
                 sessionId = offerData.session_id;
                 logMessage(`Offer created with session ID: ${sessionId}`);
 
-                // Step 2: Create RTCPeerConnection
+                // Step 3: Create RTCPeerConnection
                 peerConnection = new RTCPeerConnection({
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' }
                     ]
                 });
 
-                // Step 3: Set up event handlers
+                // Step 4: Set up event handlers
                 peerConnection.ontrack = (event) => {
                     logMessage('Received remote track');
                     if (event.streams && event.streams[0]) {
                         videoElement.srcObject = event.streams[0];
+                        document.getElementById('videoStatus').textContent = 'Video stream active';
+                        document.getElementById('videoStatus').className = 'status success';
                     }
                 };
 
@@ -268,18 +479,21 @@
                         updateStatus('WebRTC connection established!', 'success');
                         isConnected = true;
                         stopBtn.disabled = false;
+                        
+                        // Start session monitoring
+                        startSessionMonitoring();
                     } else if (peerConnection.connectionState === 'failed') {
                         updateStatus('WebRTC connection failed', 'error');
                     }
                 };
 
-                // Step 4: Set remote description (offer)
+                // Step 5: Set remote description (offer)
                 await peerConnection.setRemoteDescription({
                     type: offerData.type,
                     sdp: offerData.sdp
                 });
 
-                // Step 5: Create and send answer
+                // Step 6: Create and send answer
                 logMessage('Creating answer...');
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
@@ -306,48 +520,207 @@
             } catch (error) {
                 logMessage(`Error: ${error.message}`);
                 updateStatus(`Connection failed: ${error.message}`, 'error');
+                
+                // If this was a connection failure, refresh sessions to show current state
+                setTimeout(() => {
+                    refreshSessions();
+                }, 1000);
             }
         }
 
         async function stopStream() {
             try {
+                logMessage('Stopping WebRTC session...');
+                updateStatus('Stopping WebRTC session...', 'info');
+
+                // Close WebRTC connection
                 if (peerConnection) {
                     peerConnection.close();
                     peerConnection = null;
                 }
 
+                // Close WebRTC session (device stream will be managed automatically)
                 if (sessionId) {
-                    logMessage('Closing WebRTC session...');
-                    await fetch(`${apiUrl.value}/webrtc/sessions/${sessionId}`, {
-                        method: 'DELETE'
-                    });
+                    try {
+                        await fetch(`${apiUrl.value}/webrtc/sessions/${sessionId}`, {
+                            method: 'DELETE'
+                        });
+                        logMessage('WebRTC session closed');
+                    } catch (error) {
+                        logMessage(`Error closing WebRTC session: ${error.message}`);
+                    }
                     sessionId = null;
                 }
 
-                // Stop the device stream
-                logMessage('Stopping device stream...');
-                try {
-                    await fetch(`${apiUrl.value}/devices/${deviceId.value}/stream/stop`, {
-                        method: 'POST'
-                    });
-                    logMessage('Device stream stopped successfully');
-                } catch (error) {
-                    logMessage(`Warning: Could not stop device stream: ${error.message}`);
-                }
-
+                // Clear video
                 videoElement.srcObject = null;
+                document.getElementById('videoStatus').textContent = 'No video stream';
+                document.getElementById('videoStatus').className = 'status info';
+
                 isConnected = false;
                 stopBtn.disabled = true;
-                updateStatus('Stream stopped', 'info');
-                logMessage('Stream stopped');
+                updateStatus('WebRTC session stopped', 'info');
+
+                // Stop session monitoring
+                stopSessionMonitoring();
 
             } catch (error) {
-                logMessage(`Error stopping stream: ${error.message}`);
+                logMessage(`Error stopping WebRTC session: ${error.message}`);
+                updateStatus(`Error stopping WebRTC session: ${error.message}`, 'error');
             }
         }
 
-        // Initialize
-        logMessage('WebRTC Demo loaded. Ready to connect to RealSense API.');
+        async function refreshSessions() {
+            try {
+                logMessage('Refreshing sessions...');
+                const response = await fetch(`${apiUrl.value}/webrtc/sessions`);
+                if (!response.ok) {
+                    throw new Error(`Failed to get sessions: ${response.statusText}`);
+                }
+
+                const sessions = await response.json();
+                updateSessionsPanel(sessions);
+                logMessage(`Found ${sessions.length} active session(s)`);
+
+                // Also get stream reference info
+                await refreshStreamReferences();
+            } catch (error) {
+                logMessage(`Error refreshing sessions: ${error.message}`);
+                updateStatus(`Error refreshing sessions: ${error.message}`, 'error');
+            }
+        }
+
+        async function refreshStreamReferences() {
+            try {
+                const response = await fetch(`${apiUrl.value}/webrtc/stream-references`);
+                if (!response.ok) {
+                    throw new Error(`Failed to get stream references: ${response.statusText}`);
+                }
+
+                const refInfo = await response.json();
+                updateStreamReferencesPanel(refInfo);
+            } catch (error) {
+                logMessage(`Error refreshing stream references: ${error.message}`);
+            }
+        }
+
+        async function closeAllSessions() {
+            try {
+                logMessage('Closing all sessions...');
+                updateStatus('Closing all sessions...', 'warning');
+
+                const response = await fetch(`${apiUrl.value}/webrtc/sessions`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to close sessions: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                logMessage(`Closed ${result.closed_sessions} session(s)`);
+                updateStatus(`Closed ${result.closed_sessions} session(s)`, 'success');
+
+                // Refresh sessions panel
+                await refreshSessions();
+
+            } catch (error) {
+                logMessage(`Error closing sessions: ${error.message}`);
+                updateStatus(`Error closing sessions: ${error.message}`, 'error');
+            }
+        }
+
+        function updateSessionsPanel(sessions) {
+            if (sessions.length === 0) {
+                sessionsPanel.innerHTML = `
+                    <h3>No active sessions</h3>
+                    <p>Start a stream to see active WebRTC sessions here.</p>
+                `;
+                return;
+            }
+
+            let sessionsHtml = `<h3>Active Sessions (${sessions.length})</h3>`;
+            
+            sessions.forEach(session => {
+                const statusClass = session.connected ? 'connected' : 'disconnected';
+                const statusText = session.connected ? 'Connected' : 'Disconnected';
+                
+                sessionsHtml += `
+                    <div class="session-item ${statusClass}">
+                        <div class="session-info">
+                            <div>
+                                <strong>Device:</strong> ${session.device_id}<br>
+                                <strong>Streams:</strong> ${session.stream_types.join(', ')}<br>
+                                <span class="session-id">Session: ${session.session_id}</span>
+                            </div>
+                            <span class="connection-status ${statusClass}">${statusText}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            sessionsPanel.innerHTML = sessionsHtml;
+        }
+
+        function updateStreamReferencesPanel(refInfo) {
+            const streamRefsPanel = document.getElementById('streamRefsPanel');
+            if (!streamRefsPanel) return;
+
+            if (!refInfo.stream_references || Object.keys(refInfo.stream_references).length === 0) {
+                streamRefsPanel.innerHTML = `
+                    <h3>No active stream references</h3>
+                    <p>No device streams are currently active.</p>
+                `;
+                return;
+            }
+
+            let refsHtml = `<h3>Stream References</h3>`;
+            
+            for (const [deviceId, streamRefs] of Object.entries(refInfo.stream_references)) {
+                refsHtml += `<div class="device-refs">`;
+                refsHtml += `<h4>Device: ${deviceId}</h4>`;
+                
+                for (const [streamType, refCount] of Object.entries(streamRefs)) {
+                    const refClass = refCount > 0 ? 'active' : 'inactive';
+                    refsHtml += `
+                        <div class="stream-ref ${refClass}">
+                            <span class="stream-type">${streamType}</span>
+                            <span class="ref-count">${refCount} reference(s)</span>
+                        </div>
+                    `;
+                }
+                refsHtml += `</div>`;
+            }
+
+            streamRefsPanel.innerHTML = refsHtml;
+        }
+
+        function startSessionMonitoring() {
+            // Refresh sessions every 5 seconds
+            sessionRefreshInterval = setInterval(refreshSessions, 5000);
+            refreshSessions(); // Initial refresh
+        }
+
+        function stopSessionMonitoring() {
+            if (sessionRefreshInterval) {
+                clearInterval(sessionRefreshInterval);
+                sessionRefreshInterval = null;
+            }
+        }
+
+        // Auto-discover devices on page load
+        window.addEventListener('load', () => {
+            logMessage('Page loaded. Ready to connect to RealSense camera.');
+            discoverDevices();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            stopSessionMonitoring();
+            if (peerConnection) {
+                peerConnection.close();
+            }
+        });
     </script>
 </body>
 </html>
