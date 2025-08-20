@@ -10,6 +10,41 @@ A modern React.js web application for connecting to RealSense cameras via WebRTC
 - **Stream Type Selection**: Color, Depth, Infrared-1, Infrared-2 streams
 - **Modern UI**: Responsive design with real-time status updates
 - **Cloud Deployable**: Can be deployed to any cloud platform
+- **Signaling Server**: Dedicated Node.js server for WebRTC signaling and device control
+
+## Architecture
+
+```
+┌─────────────────┐    WebRTC     ┌──────────────────┐    REST API    ┌─────────────────┐
+│   React Client  │ ◄──────────► │ Signaling Server │ ◄──────────► │ Python API      │
+│   (Browser)     │   Socket.IO  │   (Node.js)      │              │   (FastAPI)      │
+└─────────────────┘              └──────────────────┘              └─────────────────┘
+        │                                 │                                 │
+        │                                 │                                 │
+        ▼                                 ▼                                 ▼
+   WebRTC Streams                 Session Management                RealSense Camera
+   Video/Point Cloud              Device Control                    Hardware Interface
+```
+
+### Components
+
+1. **React Client** (`http://localhost:3000`)
+   - WebRTC peer connection management
+   - Video stream display
+   - 3D point cloud visualization
+   - User interface
+
+2. **Signaling Server** (`http://localhost:3001`)
+   - WebRTC offer/answer exchange
+   - ICE candidate negotiation
+   - Session management
+   - Device control proxy
+
+3. **Python API Server** (`http://localhost:8000`)
+   - RealSense camera interface
+   - WebRTC stream generation
+   - Point cloud processing
+   - Device discovery
 
 ## Prerequisites
 
@@ -19,17 +54,49 @@ A modern React.js web application for connecting to RealSense cameras via WebRTC
 
 ## Installation
 
-1. Install dependencies:
+### Prerequisites
+- Node.js 16+ and npm
+- Python RealSense API server running on `http://localhost:8000`
+
+### Option 1: Quick Start (Recommended)
+Use the development startup script that runs both the signaling server and React app:
+
 ```bash
-npm install
+# Make the script executable (first time only)
+chmod +x start-dev.sh
+
+# Start the development environment
+./start-dev.sh
 ```
 
-2. Start the development server:
+This will:
+- Check if the Python API server is running
+- Start the signaling server on port 3001
+- Start the React development server on port 3000
+- Open your browser to `http://localhost:3000`
+
+### Option 2: Manual Start
+If you prefer to start services manually:
+
+1. **Install dependencies:**
+```bash
+npm install
+cd server && npm install && cd ..
+```
+
+2. **Start the signaling server:**
+```bash
+cd server
+npm start
+```
+
+3. **In a new terminal, start the React app:**
 ```bash
 npm start
 ```
 
-The app will open at `http://localhost:3000`
+4. **Open your browser:**
+Navigate to `http://localhost:3000`
 
 ## Configuration
 

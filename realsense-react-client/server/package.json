@@ -1,0 +1,29 @@
+{
+  "name": "realsense-signaling-server",
+  "version": "1.0.0",
+  "description": "WebRTC signaling server for RealSense camera streaming",
+  "main": "signaling-server.js",
+  "scripts": {
+    "start": "node signaling-server.js",
+    "dev": "nodemon signaling-server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "cors": "^2.8.5",
+    "axios": "^1.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "webrtc",
+    "signaling",
+    "realsense",
+    "socket.io",
+    "streaming"
+  ],
+  "author": "RealSense Web Client",
+  "license": "MIT"
+}

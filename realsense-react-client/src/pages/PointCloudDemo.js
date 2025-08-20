@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import axios from 'axios';
+import signalingService from '../services/signalingService';
 
 const PointCloudDemo = () => {
   const [apiUrl, setApiUrl] = useState('http://localhost:8000/api');
@@ -11,6 +12,7 @@ const PointCloudDemo = () => {
   const [pointCloudStatus, setPointCloudStatus] = useState('Stopped');
   const [vertexCount, setVertexCount] = useState(0);
   const [fps, setFps] = useState(0);
+  const [signalingConnected, setSignalingConnected] = useState(false);
   
   // Use ref to track running state for intervals
   const isViewerRunningRef = useRef(false);
@@ -93,8 +95,7 @@ const PointCloudDemo = () => {
 
     try {
       logMessage(`Fetching point cloud data for device: ${deviceId}`);
-      const response = await axios.get(`${apiUrl}/webrtc/pointcloud-data/${deviceId}`);
-      const data = response.data;
+      const data = await signalingService.getPointCloudData(deviceId);
 
       logMessage(`Received data: ${JSON.stringify(data).substring(0, 200)}...`);
       logMessage(`Data type: ${typeof data}, vertices type: ${typeof data.vertices}`);
@@ -264,20 +265,18 @@ const PointCloudDemo = () => {
       // Automatically activate point cloud processing
       try {
         logMessage('Activating point cloud processing...');
-        await axios.post(`${apiUrl}/devices/${deviceId}/point_cloud/activate`);
+        await signalingService.activatePointCloud(deviceId, true);
         logMessage('Point cloud processing activated');
 
         // Start a depth stream session to enable point cloud data
         logMessage('Starting depth stream session...');
-        await axios.post(`${apiUrl}/devices/${deviceId}/stream/start`, {
-          configs: [{
-            sensor_id: `${deviceId}-sensor-0`,
-            stream_type: 'depth',
-            format: 'z16',
-            resolution: { width: 640, height: 480 },
-            framerate: 30
-          }]
-        });
+        await signalingService.startDeviceStream(deviceId, [{
+          sensor_id: `${deviceId}-sensor-0`,
+          stream_type: 'depth',
+          format: 'z16',
+          resolution: { width: 640, height: 480 },
+          framerate: 30
+        }]);
         logMessage('Depth stream session started');
 
       } catch (error) {
@@ -316,7 +315,7 @@ const PointCloudDemo = () => {
       
       // Stop any active streams
       try {
-        await axios.post(`${apiUrl}/devices/${deviceId}/stream/stop`);
+        await signalingService.stopDeviceStream(deviceId);
         logMessage('Stopped active streams');
       } catch (error) {
         logMessage(`Warning: ${error.message}`);
@@ -324,7 +323,7 @@ const PointCloudDemo = () => {
       
       // Deactivate point cloud processing
       try {
-        await axios.post(`${apiUrl}/devices/${deviceId}/point_cloud/activate`, { enabled: false });
+        await signalingService.activatePointCloud(deviceId, false);
         logMessage('Deactivated point cloud processing');
       } catch (error) {
         logMessage(`Warning: ${error.message}`);
@@ -371,19 +370,19 @@ const PointCloudDemo = () => {
 
     // Clean up depth session if it exists
     if (deviceId) {
-      try {
+            try {
         logMessage('Cleaning up depth session...');
-        await axios.post(`${apiUrl}/devices/${deviceId}/stream/stop`);
+        await signalingService.stopDeviceStream(deviceId);
         logMessage('Depth session cleaned up');
-        
+    
         // Also deactivate point cloud processing
         logMessage('Deactivating point cloud processing...');
-        await axios.post(`${apiUrl}/devices/${deviceId}/point_cloud/activate`, { enabled: false });
+        await signalingService.activatePointCloud(deviceId, false);
         logMessage('Point cloud processing deactivated');
-        
+    
         // Wait a moment for cleanup to complete
         await new Promise(resolve => setTimeout(resolve, 500));
-        
+    
       } catch (error) {
         logMessage(`Warning: Failed to clean up depth session: ${error.message}`);
       }
@@ -428,6 +427,19 @@ const PointCloudDemo = () => {
   }, [logMessage]);
 
   useEffect(() => {
+    // Connect to signaling server
+    const connectToSignaling = async () => {
+      try {
+        await signalingService.connect();
+        setSignalingConnected(true);
+        logMessage('Connected to signaling server');
+      } catch (error) {
+        logMessage(`Failed to connect to signaling server: ${error.message}`);
+        setSignalingConnected(false);
+      }
+    };
+
+    connectToSignaling();
     discoverDevices();
     window.addEventListener('keydown', handleKeyPress);
 
@@ -444,12 +456,14 @@ const PointCloudDemo = () => {
       if (deviceId) {
         // Clean up any active streams
         try {
-          axios.post(`${apiUrl}/devices/${deviceId}/stream/stop`);
-          axios.post(`${apiUrl}/devices/${deviceId}/point_cloud/activate`, { enabled: false });
+          signalingService.stopDeviceStream(deviceId);
+          signalingService.activatePointCloud(deviceId, false);
         } catch (error) {
           // Ignore cleanup errors on unmount
         }
       }
+      
+      signalingService.disconnect();
     };
   }, [discoverDevices, handleKeyPress]);
 
@@ -530,6 +544,9 @@ const PointCloudDemo = () => {
             <span><strong>Vertices:</strong> {vertexCount.toLocaleString()}</span>
             <span><strong>FPS:</strong> {fps}</span>
           </div>
+        </div>
+        <div className={`status ${signalingConnected ? 'success' : 'error'}`}>
+          📡 Signaling Server: {signalingConnected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
 

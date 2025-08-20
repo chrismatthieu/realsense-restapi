@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import signalingService from '../services/signalingService';
 
 const WebRTCDemo = () => {
   const [apiUrl, setApiUrl] = useState('http://localhost:8000/api');
@@ -11,6 +12,7 @@ const WebRTCDemo = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [streamRefs, setStreamRefs] = useState([]);
+  const [signalingConnected, setSignalingConnected] = useState(false);
   
   const videoRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -91,28 +93,22 @@ const WebRTCDemo = () => {
       return;
     }
 
+    if (!signalingConnected) {
+      updateStatus('Not connected to signaling server', 'error');
+      return;
+    }
+
     try {
       logMessage('Starting WebRTC stream...');
       updateStatus('Starting WebRTC stream...', 'info');
       
-      logMessage(`Making WebRTC offer request to: ${apiUrl}/webrtc/offer`);
-      logMessage(`Request payload: ${JSON.stringify({ device_id: deviceId, stream_types: [streamType] })}`);
+      logMessage(`Creating WebRTC session via signaling server for device: ${deviceId}, stream type: ${streamType}`);
 
-      // Create WebRTC offer
-      const offerResponse = await axios.post(`${apiUrl}/webrtc/offer`, {
-        device_id: deviceId,
-        stream_types: [streamType]
-      });
-      
-      logMessage(`Offer response status: ${offerResponse.status}`);
-      logMessage(`Offer response data: ${JSON.stringify(offerResponse.data)}`);
-
-      const { session_id, sdp, type } = offerResponse.data;
-      sessionIdRef.current = session_id;
-      logMessage(`Created session: ${session_id}`);
-      
-      // Create the offer object from the API response
-      const offer = { type, sdp };
+      // Create WebRTC session via signaling server
+      const sessionData = await signalingService.createSession(deviceId, [streamType]);
+      const { sessionId, offer } = sessionData;
+      sessionIdRef.current = sessionId;
+      logMessage(`Session created: ${sessionId}`);
       
       // Debug the offer object
       logMessage(`Offer object: ${JSON.stringify(offer)}`);
@@ -137,12 +133,7 @@ const WebRTCDemo = () => {
       pc.onicecandidate = async (event) => {
         if (event.candidate) {
           try {
-            await axios.post(`${apiUrl}/webrtc/ice-candidates`, {
-              session_id: session_id,
-              candidate: event.candidate.candidate,
-              sdpMid: event.candidate.sdpMid,
-              sdpMLineIndex: event.candidate.sdpMLineIndex
-            });
+            await signalingService.sendIceCandidate(sessionId, event.candidate);
           } catch (error) {
             logMessage(`Failed to send ICE candidate: ${error.message}`);
           }
@@ -162,12 +153,9 @@ const WebRTCDemo = () => {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // Send answer
-      await axios.post(`${apiUrl}/webrtc/answer`, {
-        session_id: session_id,
-        sdp: answer.sdp,
-        type: answer.type
-      });
+      // Send answer via signaling server
+      logMessage(`Sending answer for session: ${sessionId}`);
+      await signalingService.sendAnswer(sessionId, answer);
 
       setIsConnected(true);
       updateStatus('WebRTC stream connected', 'success');
@@ -176,21 +164,17 @@ const WebRTCDemo = () => {
       // Start session refresh
       startSessionRefresh();
 
-                } catch (error) {
-              logMessage(`Failed to start stream: ${error.message}`);
-              if (error.response) {
-                logMessage(`Error status: ${error.response.status}`);
-                logMessage(`Error data: ${JSON.stringify(error.response.data)}`);
-              }
-              updateStatus(`Failed to start stream: ${error.message}`, 'error');
-            }
+    } catch (error) {
+      logMessage(`Failed to start stream: ${error.message}`);
+      updateStatus(`Failed to start stream: ${error.message}`, 'error');
+    }
   };
 
   const stopStream = async () => {
     try {
       if (sessionIdRef.current) {
         logMessage('Stopping WebRTC stream...');
-        await axios.delete(`${apiUrl}/webrtc/sessions/${sessionIdRef.current}`);
+        await signalingService.closeSession(sessionIdRef.current);
         logMessage('WebRTC stream stopped');
       }
 
@@ -251,9 +235,24 @@ const WebRTCDemo = () => {
   };
 
   useEffect(() => {
+    // Connect to signaling server
+    const connectToSignaling = async () => {
+      try {
+        await signalingService.connect();
+        setSignalingConnected(true);
+        logMessage('Connected to signaling server');
+      } catch (error) {
+        logMessage(`Failed to connect to signaling server: ${error.message}`);
+        setSignalingConnected(false);
+      }
+    };
+
+    connectToSignaling();
     discoverDevices();
+    
     return () => {
       stopSessionRefresh();
+      signalingService.disconnect();
     };
   }, [discoverDevices]);
 
@@ -339,6 +338,9 @@ const WebRTCDemo = () => {
 
         <div className={`status ${statusType}`}>
           {status}
+        </div>
+        <div className={`status ${signalingConnected ? 'success' : 'error'}`}>
+          📡 Signaling Server: {signalingConnected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
 
