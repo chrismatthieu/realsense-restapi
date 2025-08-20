@@ -373,9 +373,60 @@
                 }
 
                 isViewerRunning = true;
-                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').textContent = 'Connecting...';
                 document.getElementById('connectionStatus').className = 'status-value';
-                document.getElementById('pointCloudStatus').textContent = 'Loading...';
+                document.getElementById('pointCloudStatus').textContent = 'Activating point cloud...';
+
+                // Automatically activate point cloud processing
+                try {
+                    console.log('Activating point cloud processing...');
+                    const activateResponse = await fetch(`${apiUrl}/devices/${deviceId}/point_cloud/activate`, {
+                        method: 'POST'
+                    });
+                    
+                    if (!activateResponse.ok) {
+                        throw new Error(`Failed to activate point cloud: ${activateResponse.status}`);
+                    }
+                    
+                    const activateResult = await activateResponse.json();
+                    console.log('Point cloud activated:', activateResult);
+                    
+                    // Start depth stream directly (no WebRTC session needed for 3D viewer)
+                    console.log('Starting depth stream...');
+                    const streamResponse = await fetch(`${apiUrl}/devices/${deviceId}/stream/start`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            configs: [
+                                {
+                                    sensor_id: `${deviceId}-sensor-0`,
+                                    stream_type: "depth",
+                                    format: "z16",
+                                    resolution: { width: 640, height: 480 },
+                                    framerate: 30
+                                }
+                            ]
+                        })
+                    });
+                    
+                    if (!streamResponse.ok) {
+                        throw new Error(`Failed to start depth stream: ${streamResponse.status}`);
+                    }
+                    
+                    const streamResult = await streamResponse.json();
+                    console.log('Depth stream started:', streamResult);
+                    
+                    document.getElementById('connectionStatus').textContent = 'Connected';
+                    document.getElementById('pointCloudStatus').textContent = 'Loading point cloud data...';
+                    
+                } catch (error) {
+                    console.error('Error activating point cloud:', error);
+                    document.getElementById('pointCloudStatus').textContent = 'Failed to activate point cloud';
+                    document.getElementById('pointCloudStatus').className = 'status-value error';
+                    return;
+                }
 
                 // Start animation loop
                 if (!animationId) {
@@ -424,6 +475,11 @@
         }
 
         function updatePointCloud(vertices) {
+            // Store current camera position and target
+            const currentCameraPosition = camera.position.clone();
+            const currentTarget = controls.target.clone();
+            const currentDistance = camera.position.distanceTo(controls.target);
+            
             // Remove existing point cloud
             if (pointCloud) {
                 scene.remove(pointCloud);
@@ -469,27 +525,66 @@
             pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial);
             scene.add(pointCloud);
 
-            // Adjust camera to fit point cloud
-            const box = new THREE.Box3().setFromObject(pointCloud);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const fov = camera.fov * (Math.PI / 180);
-            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-            
-            camera.position.set(center.x, center.y, center.z + cameraZ * 1.5);
-            camera.lookAt(center);
-            controls.target.copy(center);
-            controls.update();
+            // Only adjust camera on first load or if no previous position
+            if (!window.hasInitializedCamera) {
+                // Adjust camera to fit point cloud
+                const box = new THREE.Box3().setFromObject(pointCloud);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const fov = camera.fov * (Math.PI / 180);
+                let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+                
+                camera.position.set(center.x, center.y, center.z + cameraZ * 1.5);
+                camera.lookAt(center);
+                controls.target.copy(center);
+                controls.update();
+                window.hasInitializedCamera = true;
+            } else {
+                // Preserve user's camera position and orientation
+                camera.position.copy(currentCameraPosition);
+                controls.target.copy(currentTarget);
+                controls.update();
+            }
         }
 
-        function stopPointCloudViewer() {
+        async function stopPointCloudViewer() {
             isViewerRunning = false;
             
             if (animationId) {
                 cancelAnimationFrame(animationId);
                 animationId = null;
+            }
+            
+            // Clear existing point cloud
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloudGeometry.dispose();
+                pointCloudMaterial.dispose();
+                pointCloud = null;
+            }
+            
+            // Reset camera initialization flag
+            window.hasInitializedCamera = false;
+            
+            // Stop depth stream if it was started
+            try {
+                const apiUrl = document.getElementById('apiUrl').value;
+                const deviceId = document.getElementById('deviceId').value;
+                console.log('Stopping depth stream...');
+                
+                const response = await fetch(`${apiUrl}/devices/${deviceId}/stream/stop`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    console.log('Depth stream stopped successfully');
+                } else {
+                    console.warn('Failed to stop depth stream:', response.status);
+                }
+            } catch (error) {
+                console.error('Error stopping depth stream:', error);
             }
             
             document.getElementById('connectionStatus').textContent = 'Disconnected';

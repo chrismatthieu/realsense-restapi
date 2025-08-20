@@ -65,6 +65,14 @@ async def webrtc_3d_pointcloud_demo():
     else:
         return {"message": "3D point cloud demo not found. Please ensure webrtc_3d_pointcloud_demo.html exists in the root directory."}
 
+@app.get("/test_3d_viewer_debug.html")
+async def test_3d_viewer_debug():
+    """Serve the 3D point cloud debug test page."""
+    if os.path.exists("test_3d_viewer_debug.html"):
+        return FileResponse("test_3d_viewer_debug.html")
+    else:
+        return {"message": "3D viewer debug test not found."}
+
 
 # --- Combine FastAPI and Socket.IO into a single ASGI App ---
 # Mount the Socket.IO app (`sio`) onto the FastAPI app (`app`)

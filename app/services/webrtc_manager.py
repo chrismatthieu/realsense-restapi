@@ -313,6 +313,9 @@ class WebRTCManager:
                         "configs": new_stream_configs,
                         "started_at": time.time()
                     }
+                    
+                    # Small delay to prevent race conditions
+                    await asyncio.sleep(0.05)
             
             return need_to_start_stream
 
@@ -384,19 +387,48 @@ class WebRTCManager:
                             )
                             stream_configs.append(stream_config)
                         
-                        # Restart device stream with updated configuration
-                        self.realsense_manager.stop_stream(device_id)
-                        self.realsense_manager.start_stream(device_id, stream_configs)
-                        
-                        # Disable point cloud processing if no pointcloud streams remain
-                        if not any(config["stream_type"] == "pointcloud" for config in updated_configs):
-                            self.realsense_manager.activate_point_cloud(device_id, False)
-                        
-                        # Update stored configuration
-                        self.device_stream_configs[device_id] = {
-                            "configs": updated_configs,
-                            "started_at": time.time()
-                        }
+                        try:
+                            # Stop current stream first
+                            self.realsense_manager.stop_stream(device_id)
+                            
+                            # Wait a moment for cleanup
+                            await asyncio.sleep(0.1)
+                            
+                            # Start new stream with updated configuration
+                            self.realsense_manager.start_stream(device_id, stream_configs)
+                            
+                            # Disable point cloud processing if no pointcloud streams remain
+                            if not any(config["stream_type"] == "pointcloud" for config in updated_configs):
+                                self.realsense_manager.activate_point_cloud(device_id, False)
+                            
+                            # Update stored configuration
+                            self.device_stream_configs[device_id] = {
+                                "configs": updated_configs,
+                                "started_at": time.time()
+                            }
+                        except Exception as e:
+                            print(f"Error updating device stream configuration: {str(e)}")
+                            # If update fails, try to restart with original configuration
+                            try:
+                                self.realsense_manager.stop_stream(device_id)
+                                await asyncio.sleep(0.1)
+                                # Restart with original configs
+                                original_configs = []
+                                for config in current_configs:
+                                    stream_config = StreamConfig(
+                                        sensor_id=config["sensor_id"],
+                                        stream_type=config["stream_type"],
+                                        format=config["format"],
+                                        resolution=Resolution(
+                                            width=config["resolution"]["width"],
+                                            height=config["resolution"]["height"]
+                                        ),
+                                        framerate=config["framerate"]
+                                    )
+                                    original_configs.append(stream_config)
+                                self.realsense_manager.start_stream(device_id, original_configs)
+                            except Exception as restart_error:
+                                print(f"Failed to restart with original configuration: {str(restart_error)}")
                         
                         print(f"Updated device stream for {device_id} - removed {removed_stream_types}, now has {len(updated_configs)} stream types")
                     else:
@@ -704,8 +736,11 @@ class WebRTCManager:
         except Exception as e:
             print(f"Error closing peer connection for session {session_id}: {str(e)}")
 
-        # Decrement stream references
-        await self._decrement_stream_references(device_id, stream_types)
+        # Decrement stream references with better error handling
+        try:
+            await self._decrement_stream_references(device_id, stream_types)
+        except Exception as e:
+            print(f"Error decrementing stream references for session {session_id}: {str(e)}")
 
         # Remove session
         async with self.lock:
