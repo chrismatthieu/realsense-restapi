@@ -507,27 +507,48 @@ class WebRTCManager:
                     raise RealSenseError(status_code=400, detail=f"Failed to start device stream: {str(e)}")
 
             # Verify device is streaming and requested stream types are available
-            stream_status = self.realsense_manager.get_stream_status(device_id)
-            if not stream_status.is_streaming:
-                # Rollback reference counts if device is not streaming
-                await self._decrement_stream_references(device_id, stream_types)
-                references_added = False
-                raise RealSenseError(status_code=400, detail=f"Device {device_id} is not streaming")
-
-            # Verify requested stream types are available
-            for stream_type in stream_types:
-                if stream_type == "pointcloud":
-                    # For pointcloud, check if depth stream is available
-                    if "depth" not in stream_status.active_streams:
-                        # Rollback reference counts if depth stream is not available
+            # Add retry mechanism for stream activation
+            max_retries = 5
+            retry_delay = 0.5  # seconds
+            
+            for attempt in range(max_retries):
+                stream_status = self.realsense_manager.get_stream_status(device_id)
+                
+                if not stream_status.is_streaming:
+                    if attempt < max_retries - 1:
+                        print(f"Device {device_id} not streaming yet, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        # Rollback reference counts if device is not streaming
                         await self._decrement_stream_references(device_id, stream_types)
                         references_added = False
-                        raise RealSenseError(status_code=400, detail=f"Depth stream is not active (required for pointcloud)")
-                elif stream_type not in stream_status.active_streams:
-                    # Rollback reference counts if stream type is not available
-                    await self._decrement_stream_references(device_id, stream_types)
-                    references_added = False
-                    raise RealSenseError(status_code=400, detail=f"Stream type {stream_type} is not active")
+                        raise RealSenseError(status_code=400, detail=f"Device {device_id} is not streaming after {max_retries} attempts")
+
+                # Check if all requested stream types are available
+                missing_streams = []
+                for stream_type in stream_types:
+                    if stream_type == "pointcloud":
+                        # For pointcloud, check if depth stream is available
+                        if "depth" not in stream_status.active_streams:
+                            missing_streams.append("depth (required for pointcloud)")
+                    elif stream_type not in stream_status.active_streams:
+                        missing_streams.append(stream_type)
+                
+                if missing_streams:
+                    if attempt < max_retries - 1:
+                        print(f"Stream types {missing_streams} not active yet, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        # Rollback reference counts if stream types are not available
+                        await self._decrement_stream_references(device_id, stream_types)
+                        references_added = False
+                        raise RealSenseError(status_code=400, detail=f"Stream types {missing_streams} are not active after {max_retries} attempts")
+                
+                # All streams are active, break out of retry loop
+                print(f"All requested stream types are active after {attempt + 1} attempts")
+                break
 
             # Create peer connection
             pc = RTCPeerConnection(RTCConfiguration(iceServers=self.ice_servers))

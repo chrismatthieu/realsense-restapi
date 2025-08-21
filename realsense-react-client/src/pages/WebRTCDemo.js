@@ -1,23 +1,24 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import axios from 'axios';
-import signalingService from '../services/signalingService';
+import cloudSignalingService from '../services/cloudSignalingService';
 
 const WebRTCDemo = () => {
-  const [apiUrl, setApiUrl] = useState('http://localhost:8000/api');
   const [deviceId, setDeviceId] = useState('');
   const [streamType, setStreamType] = useState('color');
   const [status, setStatus] = useState('Ready to connect');
   const [statusType, setStatusType] = useState('info');
   const [log, setLog] = useState('');
   const [isConnected, setIsConnected] = useState(false);
-  const [sessions, setSessions] = useState([]);
-  const [streamRefs, setStreamRefs] = useState([]);
+
   const [signalingConnected, setSignalingConnected] = useState(false);
+  const [availableRobots, setAvailableRobots] = useState([]);
+  const [selectedRobot, setSelectedRobot] = useState(null);
   
   const videoRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const sessionIdRef = useRef(null);
   const sessionRefreshIntervalRef = useRef(null);
+  const connectionEstablishedRef = useRef(false);
+  const cleanupCalledRef = useRef(false);
 
   const logMessage = useCallback((message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -30,71 +31,59 @@ const WebRTCDemo = () => {
   }, []);
 
   const resetDevice = async () => {
-    if (!deviceId) {
-      updateStatus('Please enter a device ID', 'error');
+    if (!selectedRobot) {
+      updateStatus('Please select a robot first', 'error');
       return;
     }
 
     try {
-      logMessage('Performing hardware reset on device...');
-      updateStatus('Resetting device...', 'info');
+      logMessage('Refreshing robot connection...');
+      updateStatus('Refreshing robot...', 'info');
       
-      // Try hardware reset first
-      try {
-        await axios.post(`${apiUrl}/devices/${deviceId}/hw_reset`);
-        logMessage('Hardware reset completed');
-      } catch (error) {
-        logMessage(`Hardware reset failed: ${error.message}`);
-      }
-      
-      // Wait for device to stabilize
+      // Wait for robot to stabilize
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Try to discover devices again
-      await discoverDevices();
+      // Try to discover robots again
+      await discoverRobots();
       
-      updateStatus('Device reset completed', 'success');
+      updateStatus('Robot refresh completed', 'success');
     } catch (error) {
-      logMessage(`Failed to reset device: ${error.message}`);
-      updateStatus(`Failed to reset device: ${error.message}`, 'error');
+      logMessage(`Failed to refresh robot: ${error.message}`);
+      updateStatus(`Failed to refresh robot: ${error.message}`, 'error');
     }
   };
 
-  const discoverDevices = useCallback(async () => {
+  const discoverRobots = useCallback(async () => {
     try {
-      logMessage('Discovering devices...');
-      updateStatus('Discovering devices...', 'info');
+      logMessage('Discovering available robots...');
+      updateStatus('Discovering robots...', 'info');
       
-      logMessage(`Making request to: ${apiUrl}/devices/`);
-      const response = await axios.get(`${apiUrl}/devices/`);
-      logMessage(`Response status: ${response.status}`);
-      logMessage(`Response data: ${JSON.stringify(response.data)}`);
+      const robots = cloudSignalingService.getAvailableRobots();
+      setAvailableRobots(robots);
       
-      const devices = response.data;
-      
-      if (devices.length > 0) {
-        setDeviceId(devices[0].device_id);
-        logMessage(`Found ${devices.length} device(s): ${devices.map(d => d.device_id).join(', ')}`);
-        updateStatus(`Found ${devices.length} device(s)`, 'success');
+      if (robots.length > 0) {
+        setSelectedRobot(robots[0]);
+        setDeviceId(robots[0].deviceInfo.deviceId);
+        logMessage(`Found ${robots.length} robot(s): ${robots.map(r => r.robotId).join(', ')}`);
+        updateStatus(`Found ${robots.length} robot(s)`, 'success');
       } else {
-        logMessage('No devices found');
-        updateStatus('No devices found', 'error');
+        logMessage('No robots available');
+        updateStatus('No robots available', 'warning');
       }
     } catch (error) {
-      logMessage(`Failed to discover devices: ${error.message}`);
-      logMessage(`Error details: ${JSON.stringify(error.response?.data || error)}`);
-      updateStatus(`Failed to discover devices: ${error.message}`, 'error');
+      logMessage(`Failed to discover robots: ${error.message}`);
+      updateStatus(`Failed to discover robots: ${error.message}`, 'error');
     }
-  }, [apiUrl, logMessage, updateStatus]);
+  }, [logMessage, updateStatus]);
 
   const startStream = async () => {
-    if (!deviceId) {
-      updateStatus('Please enter a device ID', 'error');
+    if (!selectedRobot) {
+      updateStatus('Please select a robot', 'error');
       return;
     }
 
     if (!signalingConnected) {
-      updateStatus('Not connected to signaling server', 'error');
+      updateStatus('Not connected to cloud server', 'error');
       return;
     }
 
@@ -102,10 +91,10 @@ const WebRTCDemo = () => {
       logMessage('Starting WebRTC stream...');
       updateStatus('Starting WebRTC stream...', 'info');
       
-      logMessage(`Creating WebRTC session via signaling server for device: ${deviceId}, stream type: ${streamType}`);
+      logMessage(`Creating WebRTC session for robot: ${selectedRobot.robotId}, device: ${selectedRobot.deviceInfo.deviceId}, stream type: ${streamType}`);
 
-      // Create WebRTC session via signaling server
-      const sessionData = await signalingService.createSession(deviceId, [streamType]);
+      // Create WebRTC session via cloud server
+      const sessionData = await cloudSignalingService.createSession(selectedRobot.robotId, selectedRobot.deviceInfo.deviceId, [streamType]);
       const { sessionId, offer } = sessionData;
       sessionIdRef.current = sessionId;
       logMessage(`Session created: ${sessionId}`);
@@ -133,7 +122,7 @@ const WebRTCDemo = () => {
       pc.onicecandidate = async (event) => {
         if (event.candidate) {
           try {
-            await signalingService.sendIceCandidate(sessionId, event.candidate);
+            await cloudSignalingService.sendIceCandidate(sessionId, event.candidate);
           } catch (error) {
             logMessage(`Failed to send ICE candidate: ${error.message}`);
           }
@@ -153,9 +142,9 @@ const WebRTCDemo = () => {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // Send answer via signaling server
+      // Send answer via cloud server
       logMessage(`Sending answer for session: ${sessionId}`);
-      await signalingService.sendAnswer(sessionId, answer);
+      await cloudSignalingService.sendAnswer(sessionId, answer);
 
       setIsConnected(true);
       updateStatus('WebRTC stream connected', 'success');
@@ -174,7 +163,7 @@ const WebRTCDemo = () => {
     try {
       if (sessionIdRef.current) {
         logMessage('Stopping WebRTC stream...');
-        await signalingService.closeSession(sessionIdRef.current);
+        await cloudSignalingService.closeSession(sessionIdRef.current);
         logMessage('WebRTC stream stopped');
       }
 
@@ -199,13 +188,9 @@ const WebRTCDemo = () => {
 
   const refreshSessions = async () => {
     try {
-      const [sessionsResponse, streamRefsResponse] = await Promise.all([
-        axios.get(`${apiUrl}/webrtc/sessions`),
-        axios.get(`${apiUrl}/webrtc/stream-references`)
-      ]);
-
-      setSessions(sessionsResponse.data);
-      setStreamRefs(streamRefsResponse.data);
+      // In cloud architecture, sessions are managed by the cloud server
+      // We can get session info from the cloud signaling service
+      logMessage('Session management handled by cloud server');
     } catch (error) {
       logMessage(`Failed to refresh sessions: ${error.message}`);
     }
@@ -214,10 +199,12 @@ const WebRTCDemo = () => {
   const closeAllSessions = async () => {
     try {
       logMessage('Closing all sessions...');
-      await axios.delete(`${apiUrl}/webrtc/sessions`);
+      // Close current session if active
+      if (sessionIdRef.current) {
+        await cloudSignalingService.closeSession(sessionIdRef.current);
+        sessionIdRef.current = null;
+      }
       logMessage('All sessions closed');
-      setSessions([]);
-      setStreamRefs([]);
     } catch (error) {
       logMessage(`Failed to close all sessions: ${error.message}`);
     }
@@ -235,53 +222,116 @@ const WebRTCDemo = () => {
   };
 
   useEffect(() => {
-    // Connect to signaling server
-    const connectToSignaling = async () => {
+    // Only connect once
+    if (connectionEstablishedRef.current) {
+      return;
+    }
+    
+    connectionEstablishedRef.current = true;
+    
+    // Connect to cloud signaling server
+    const connectToCloud = async () => {
       try {
-        await signalingService.connect();
+        logMessage('Attempting to connect to cloud server...');
+        await cloudSignalingService.connect();
         setSignalingConnected(true);
-        logMessage('Connected to signaling server');
+        logMessage('Connected to cloud server');
+        
+        // Set up event listeners
+        cloudSignalingService.addEventListener('available-robots', (robots) => {
+          logMessage(`Received ${robots.length} available robots`);
+          setAvailableRobots(robots);
+          // Only set selected robot if none is currently selected
+          if (robots.length > 0) {
+            setSelectedRobot(prev => {
+              if (!prev) {
+                const firstRobot = robots[0];
+                setDeviceId(firstRobot.deviceInfo.deviceId);
+                logMessage(`Auto-selected robot: ${firstRobot.robotId}`);
+                return firstRobot;
+              }
+              return prev;
+            });
+          }
+        });
+        
+        cloudSignalingService.addEventListener('robot-available', (robot) => {
+          logMessage(`Robot available: ${robot.robotId}`);
+          setAvailableRobots(prev => [...prev, robot]);
+        });
+        
+        cloudSignalingService.addEventListener('robot-unavailable', (robot) => {
+          logMessage(`Robot unavailable: ${robot.robotId}`);
+          setAvailableRobots(prev => prev.filter(r => r.robotId !== robot.robotId));
+          setSelectedRobot(prev => {
+            if (prev && prev.robotId === robot.robotId) {
+              return null;
+            }
+            return prev;
+          });
+        });
+        
+        cloudSignalingService.addEventListener('disconnected', (data) => {
+          logMessage(`Disconnected from cloud server: ${data.reason}`);
+          setSignalingConnected(false);
+        });
+        
+        cloudSignalingService.addEventListener('reconnected', (data) => {
+          logMessage(`Reconnected to cloud server (attempt ${data.attemptNumber})`);
+          setSignalingConnected(true);
+        });
+        
       } catch (error) {
-        logMessage(`Failed to connect to signaling server: ${error.message}`);
+        logMessage(`Failed to connect to cloud server: ${error.message}`);
         setSignalingConnected(false);
       }
     };
 
-    connectToSignaling();
-    discoverDevices();
+    connectToCloud();
     
+    // Cleanup function - only run on component unmount
     return () => {
-      stopSessionRefresh();
-      signalingService.disconnect();
+      // Only cleanup if this is a real unmount, not a development mode re-run
+      if (connectionEstablishedRef.current && !cleanupCalledRef.current) {
+        cleanupCalledRef.current = true;
+        logMessage('Component unmounting, cleaning up cloud connection...');
+        stopSessionRefresh();
+        cloudSignalingService.disconnect();
+        connectionEstablishedRef.current = false;
+      }
     };
-  }, [discoverDevices]);
+  }, []); // Empty dependency array - only run once
 
   return (
     <div>
       <div className="container">
-        <h2>🎥 RealSense WebRTC Multi-Client Demo</h2>
-        <p>Connect to RealSense cameras via WebRTC for real-time video streaming</p>
+        <h2>🤖 Robot WebRTC Multi-Client Demo</h2>
+        <p>Connect to robots with RealSense cameras via cloud WebRTC for real-time video streaming</p>
+        
+
         
         <div className="form-group">
-          <label htmlFor="apiUrl">API URL:</label>
-          <input
-            type="text"
-            id="apiUrl"
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-            placeholder="http://localhost:8000/api"
-          />
-        </div>
-        
-        <div className="form-group">
-          <label htmlFor="deviceId">Device ID:</label>
-          <input
-            type="text"
-            id="deviceId"
-            value={deviceId}
-            onChange={(e) => setDeviceId(e.target.value)}
-            placeholder="e.g., 844212070924"
-          />
+          <label htmlFor="robotSelect">Select Robot:</label>
+          <select
+            id="robotSelect"
+            value={selectedRobot ? selectedRobot.robotId : ''}
+            onChange={(e) => {
+              const robot = availableRobots.find(r => r.robotId === e.target.value);
+              setSelectedRobot(robot);
+              if (robot) {
+                setDeviceId(robot.deviceInfo.deviceId);
+              }
+            }}
+            disabled={availableRobots.length === 0}
+          >
+            <option value="">No robots available</option>
+            {availableRobots.map(robot => (
+              <option key={robot.robotId} value={robot.robotId}>
+                {robot.deviceInfo.name} (Device: {robot.deviceInfo.deviceId})
+              </option>
+            ))}
+          </select>
+          <small>Available robots: {availableRobots.length} | Selected device: {deviceId || 'None'}</small>
         </div>
         
         <div className="form-group">
@@ -308,8 +358,8 @@ const WebRTCDemo = () => {
         </div>
         
         <div>
-          <button onClick={discoverDevices} className="button">
-            🔍 Discover Devices
+          <button onClick={discoverRobots} className="button">
+            🔍 Discover Robots
           </button>
           <button 
             onClick={startStream} 
@@ -332,7 +382,17 @@ const WebRTCDemo = () => {
             🗑️ Close All Sessions
           </button>
           <button onClick={resetDevice} className="button warning">
-            🔄 Reset Device
+            🔄 Refresh Robot
+          </button>
+          <button 
+            onClick={() => {
+              logMessage('Manual connection test...');
+              logMessage(`Cloud service connected: ${cloudSignalingService.getConnectionStatus().isConnected}`);
+              logMessage(`Available robots: ${cloudSignalingService.getAvailableRobots().length}`);
+            }} 
+            className="button info"
+          >
+            🔍 Test Connection
           </button>
         </div>
 
@@ -340,47 +400,45 @@ const WebRTCDemo = () => {
           {status}
         </div>
         <div className={`status ${signalingConnected ? 'success' : 'error'}`}>
-          📡 Signaling Server: {signalingConnected ? 'Connected' : 'Disconnected'}
+          ☁️ Cloud Server: {signalingConnected ? 'Connected' : 'Disconnected'} | Robots: {availableRobots.length} | Service: {cloudSignalingService.getConnectionStatus().isConnected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
 
       <div className="container">
-        <h2>📊 Active Sessions</h2>
+        <h2>📊 Cloud Sessions</h2>
         <div className="sessions-panel">
-          {sessions.length > 0 ? (
+          {sessionIdRef.current ? (
             <div>
-              <h3>Active WebRTC Sessions ({sessions.length})</h3>
-              {sessions.map((session, index) => (
-                <p key={index}>
-                  Session {index + 1}: {session.session_id} - {session.device_id} ({session.stream_types.join(', ')})
-                </p>
-              ))}
+              <h3>Active WebRTC Session</h3>
+              <p>Session ID: {sessionIdRef.current}</p>
+              <p>Robot: {selectedRobot?.robotId || 'Unknown'}</p>
+              <p>Device: {deviceId || 'Unknown'}</p>
+              <p>Stream Type: {streamType}</p>
             </div>
           ) : (
             <div>
               <h3>No active sessions</h3>
-              <p>Start a stream to see active WebRTC sessions here.</p>
+              <p>Start a stream to establish a WebRTC session with a robot.</p>
             </div>
           )}
         </div>
       </div>
 
       <div className="container">
-        <h2>🔗 Stream References</h2>
+        <h2>🔗 Cloud Connection</h2>
         <div className="sessions-panel">
-          {streamRefs.length > 0 ? (
+          {signalingConnected ? (
             <div>
-              <h3>Active Stream References ({streamRefs.length})</h3>
-              {streamRefs.map((ref, index) => (
-                <p key={index}>
-                  Device {ref.device_id}: {ref.stream_type} (refs: {ref.reference_count})
-                </p>
-              ))}
+              <h3>Cloud Server Status</h3>
+              <p>✅ Connected to cloud signaling server</p>
+              <p>🤖 Available robots: {availableRobots.length}</p>
+              <p>📡 WebRTC sessions managed by cloud server</p>
             </div>
           ) : (
             <div>
-              <h3>No active stream references</h3>
-              <p>No device streams are currently active.</p>
+              <h3>Cloud Server Status</h3>
+              <p>❌ Not connected to cloud server</p>
+              <p>Please check your connection to the cloud signaling server.</p>
             </div>
           )}
         </div>

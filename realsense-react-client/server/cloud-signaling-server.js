@@ -1,0 +1,255 @@
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+
+class CloudSignalingServer {
+  constructor() {
+    this.app = express();
+    this.server = http.createServer(this.app);
+    this.io = socketIo(this.server, {
+      cors: {
+        origin: "*", // Allow all origins for cloud deployment
+        methods: ["GET", "POST"]
+      }
+    });
+    
+    this.port = process.env.PORT || 3001;
+    
+    // Connection tracking
+    this.robots = new Map(); // robotId -> socket
+    this.clients = new Map(); // clientId -> socket
+    this.sessions = new Map(); // sessionId -> session data
+    
+    this.setupMiddleware();
+    this.setupSocketHandlers();
+  }
+
+  setupMiddleware() {
+    this.app.use(cors());
+    this.app.use(express.json());
+    
+    this.app.get('/health', (req, res) => {
+      res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        robots: this.robots.size,
+        clients: this.clients.size,
+        sessions: this.sessions.size
+      });
+    });
+
+    this.app.get('/robots', (req, res) => {
+      const availableRobots = Array.from(this.robots.keys()).map(robotId => ({
+        robotId,
+        deviceInfo: this.getRobotDeviceInfo(robotId)
+      }));
+      res.json(availableRobots);
+    });
+    
+    // Test endpoint to send a test event to the robot
+    this.app.post('/test-robot', (req, res) => {
+      const robotId = req.body.robotId || 'robot-844212070924';
+      const robotSocket = this.robots.get(robotId);
+      
+      if (robotSocket) {
+        console.log(`🧪 Sending test event to robot ${robotId}`);
+        robotSocket.emit('test', { message: 'Hello from cloud server!', timestamp: new Date().toISOString() });
+        res.json({ success: true, message: 'Test event sent to robot' });
+      } else {
+        res.status(404).json({ success: false, message: 'Robot not found' });
+      }
+    });
+  }
+
+  setupSocketHandlers() {
+    this.io.on('connection', (socket) => {
+      console.log(`New connection: ${socket.id}`);
+      
+      // Handle robot registration
+      socket.on('robot-register', (data) => {
+        const { robotId, deviceInfo } = data;
+        console.log(`🤖 Robot registered: ${robotId}`);
+        
+        this.robots.set(robotId, socket);
+        socket.robotId = robotId;
+        socket.deviceInfo = deviceInfo;
+        
+        // Broadcast robot availability to all clients
+        this.broadcastToClients('robot-available', {
+          robotId,
+          deviceInfo
+        });
+      });
+
+      // Handle client registration
+      socket.on('client-register', (data) => {
+        const { clientId } = data;
+        console.log(`👤 Client registered: ${clientId}`);
+        
+        this.clients.set(clientId, socket);
+        socket.clientId = clientId;
+        
+        // Send available robots to new client
+        const availableRobots = Array.from(this.robots.keys()).map(robotId => ({
+          robotId,
+          deviceInfo: this.getRobotDeviceInfo(robotId)
+        }));
+        socket.emit('available-robots', availableRobots);
+      });
+
+      // Handle WebRTC session creation (from client to robot)
+      socket.on('create-session', (data) => {
+        const { robotId, deviceId, streamTypes } = data;
+        const robotSocket = this.robots.get(robotId);
+        
+        if (!robotSocket) {
+          socket.emit('session-error', { error: 'Robot not available' });
+          return;
+        }
+
+        const sessionId = this.generateSessionId();
+        const sessionData = {
+          sessionId,
+          robotId,
+          deviceId,
+          streamTypes,
+          clientSocket: socket,
+          robotSocket: robotSocket,
+          createdAt: new Date()
+        };
+        
+        this.sessions.set(sessionId, sessionData);
+        
+        console.log(`📡 Creating session ${sessionId} for robot ${robotId}`);
+        
+        // Forward to robot
+        robotSocket.emit('create-session', {
+          sessionId,
+          deviceId,
+          streamTypes
+        });
+      });
+
+      // Handle WebRTC offer (from robot to client)
+      socket.on('webrtc-offer', (data) => {
+        const { sessionId, offer } = data;
+        const session = this.sessions.get(sessionId);
+        
+        if (session) {
+          session.offer = offer;
+          console.log(`📤 Forwarding offer for session ${sessionId}`);
+          session.clientSocket.emit('webrtc-offer', { sessionId, offer });
+        }
+      });
+
+      // Handle WebRTC answer (from client to robot)
+      socket.on('webrtc-answer', (data) => {
+        const { sessionId, answer } = data;
+        const session = this.sessions.get(sessionId);
+        
+        if (session) {
+          console.log(`📤 Forwarding answer for session ${sessionId}`);
+          session.robotSocket.emit('webrtc-answer', { sessionId, answer });
+        }
+      });
+
+      // Handle ICE candidates (bidirectional)
+      socket.on('ice-candidate', (data) => {
+        const { sessionId, candidate } = data;
+        const session = this.sessions.get(sessionId);
+        
+        if (session) {
+          // Forward to the other party
+          if (socket === session.clientSocket) {
+            session.robotSocket.emit('ice-candidate', { sessionId, candidate });
+          } else {
+            session.clientSocket.emit('ice-candidate', { sessionId, candidate });
+          }
+        }
+      });
+
+      // Handle session cleanup
+      socket.on('close-session', (data) => {
+        const { sessionId } = data;
+        const session = this.sessions.get(sessionId);
+        
+        if (session) {
+          console.log(`🗑️ Closing session ${sessionId}`);
+          this.sessions.delete(sessionId);
+          
+          // Notify the other party
+          if (socket === session.clientSocket) {
+            session.robotSocket.emit('session-closed', { sessionId });
+          } else {
+            session.clientSocket.emit('session-closed', { sessionId });
+          }
+        }
+      });
+
+      // Handle disconnection
+      socket.on('disconnect', () => {
+        console.log(`❌ Connection lost: ${socket.id}`);
+        
+        if (socket.robotId) {
+          console.log(`🤖 Robot disconnected: ${socket.robotId}`);
+          this.robots.delete(socket.robotId);
+          this.broadcastToClients('robot-unavailable', { robotId: socket.robotId });
+        }
+        
+        if (socket.clientId) {
+          console.log(`👤 Client disconnected: ${socket.clientId}`);
+          this.clients.delete(socket.clientId);
+        }
+        
+        // Clean up sessions
+        for (const [sessionId, session] of this.sessions.entries()) {
+          if (session.clientSocket === socket || session.robotSocket === socket) {
+            console.log(`🗑️ Cleaning up session ${sessionId} due to disconnect`);
+            this.sessions.delete(sessionId);
+            
+            // Notify the other party
+            if (session.clientSocket === socket) {
+              session.robotSocket.emit('session-closed', { sessionId });
+            } else {
+              session.clientSocket.emit('session-closed', { sessionId });
+            }
+          }
+        }
+      });
+    });
+  }
+
+  broadcastToClients(event, data) {
+    for (const clientSocket of this.clients.values()) {
+      clientSocket.emit(event, data);
+    }
+  }
+
+  getRobotDeviceInfo(robotId) {
+    const robotSocket = this.robots.get(robotId);
+    return robotSocket ? robotSocket.deviceInfo : { robotId, status: 'unknown' };
+  }
+
+  generateSessionId() {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  }
+
+  start() {
+    this.server.listen(this.port, () => {
+      console.log(`🚀 Cloud signaling server running on port ${this.port}`);
+      console.log(`🌐 CORS enabled for all origins`);
+      console.log(`🤖 Ready for robot and client connections`);
+      console.log(`📊 Health check: http://localhost:${this.port}/health`);
+      console.log(`🤖 Available robots: http://localhost:${this.port}/robots`);
+    });
+  }
+}
+
+module.exports = CloudSignalingServer;
+
+// Start server if run directly
+if (require.main === module) {
+  const server = new CloudSignalingServer();
+  server.start();
+}
