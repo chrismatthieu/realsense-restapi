@@ -26,6 +26,11 @@ class RealSenseVideoTrack(VideoStreamTrack):
         self._frame_count = 0
         self._last_frame_time = time.time()
 
+    def switch_stream_type(self, new_stream_type: str):
+        """Switch the stream type for this video track."""
+        print(f"🔄 Switching video track from {self.stream_type} to {new_stream_type}")
+        self.stream_type = new_stream_type
+
     async def recv(self):
         try:
             # Get frame from RealSense
@@ -309,10 +314,47 @@ class WebRTCManager:
                         raise RealSenseError(status_code=400, detail=f"Failed to restart device stream: {str(e)}")
                 else:
                     # First time starting device stream
-                    self.device_stream_configs[device_id] = {
-                        "configs": new_stream_configs,
-                        "started_at": time.time()
-                    }
+                    try:
+                        from app.models.stream import StreamConfig, Resolution
+                        
+                        # Convert configs to StreamConfig objects
+                        stream_configs = []
+                        for config in new_stream_configs:
+                            stream_config = StreamConfig(
+                                sensor_id=config["sensor_id"],
+                                stream_type=config["stream_type"],
+                                format=config["format"],
+                                resolution=Resolution(
+                                    width=config["resolution"]["width"],
+                                    height=config["resolution"]["height"]
+                                ),
+                                framerate=config["framerate"]
+                            )
+                            stream_configs.append(stream_config)
+                        
+                        # Start the actual RealSense stream
+                        print(f"Starting device stream for {device_id} with {len(stream_configs)} stream types")
+                        self.realsense_manager.start_stream(device_id, stream_configs)
+                        
+                        # Enable point cloud processing if pointcloud stream is requested
+                        if any(config["stream_type"] == "pointcloud" for config in new_stream_configs):
+                            self.realsense_manager.activate_point_cloud(device_id, True)
+                        
+                        # Store configuration after successful start
+                        self.device_stream_configs[device_id] = {
+                            "configs": new_stream_configs,
+                            "started_at": time.time()
+                        }
+                        
+                        print(f"Started device stream for {device_id} with {len(new_stream_configs)} stream types")
+                    except Exception as e:
+                        # Rollback reference counts on failure
+                        for stream_type in stream_types:
+                            if stream_type in self.stream_references[device_id]:
+                                self.stream_references[device_id][stream_type] -= 1
+                                if self.stream_references[device_id][stream_type] <= 0:
+                                    del self.stream_references[device_id][stream_type]
+                        raise RealSenseError(status_code=400, detail=f"Failed to start device stream: {str(e)}")
                     
                     # Small delay to prevent race conditions
                     await asyncio.sleep(0.05)
@@ -740,6 +782,78 @@ class WebRTCManager:
                     # Skip sessions that can't be queried
                     continue
             return sessions
+
+    async def switch_stream_type(self, session_id: str, new_stream_types: List[str]) -> bool:
+        """Switch stream types within an existing WebRTC session."""
+        try:
+            async with asyncio.timeout(10.0):  # 10 second timeout for entire operation
+                # First, get session info while holding the lock
+                async with self.lock:
+                    if session_id not in self.sessions:
+                        raise RealSenseError(status_code=404, detail=f"Session {session_id} not found")
+
+                    session = self.sessions[session_id]
+                    device_id = session["device_id"]
+                    video_tracks = session["video_tracks"]
+                    old_stream_types = session["stream_types"]
+
+                    print(f"🔄 Switching stream types for session {session_id} from {old_stream_types} to {new_stream_types}")
+
+                    # Update stream types in session first
+                    session["stream_types"] = new_stream_types
+                    session["last_activity"] = time.time()
+
+                # Release lock before calling _ensure_device_stream to avoid deadlock
+                print(f"🚀 Starting new device stream for {device_id} with types: {new_stream_types}")
+                print(f"🔍 About to call _ensure_device_stream...")
+                await self._ensure_device_stream(device_id, new_stream_types)
+                print(f"✅ _ensure_device_stream completed")
+
+                # Wait for new stream to be fully active
+                max_retries = 5
+                retry_delay = 0.2
+                for attempt in range(max_retries):
+                    stream_status = self.realsense_manager.get_stream_status(device_id)
+                    active_streams = set(stream_status.active_streams)
+                    new_streams_set = set(new_stream_types)
+                    
+                    if new_streams_set.issubset(active_streams):
+                        print(f"✅ New stream types {new_stream_types} are active after {attempt + 1} attempts")
+                        print(f"📊 Active streams: {active_streams}")
+                        break
+                    print(f"⏳ Waiting for new stream types to activate (attempt {attempt + 1}/{max_retries})")
+                    print(f"📊 Current active streams: {active_streams}, waiting for: {new_stream_types}")
+                    await asyncio.sleep(retry_delay)
+
+                # Re-acquire lock to update video tracks and stream references
+                async with self.lock:
+                    # Now update the video track stream types so they request from the new stream
+                    for i, track in enumerate(video_tracks):
+                        if i < len(new_stream_types):
+                            if hasattr(track, 'switch_stream_type'):
+                                track.switch_stream_type(new_stream_types[i])
+                                print(f"✅ Switched track {i} to stream type: {new_stream_types[i]}")
+
+                    # Update stream references (remove old, add new)
+                    for stream_type in old_stream_types:
+                        if device_id in self.stream_references and stream_type in self.stream_references[device_id]:
+                            self.stream_references[device_id][stream_type] -= 1
+                            if self.stream_references[device_id][stream_type] <= 0:
+                                del self.stream_references[device_id][stream_type]
+
+                    for stream_type in new_stream_types:
+                        if device_id not in self.stream_references:
+                            self.stream_references[device_id] = {}
+                        self.stream_references[device_id][stream_type] = self.stream_references[device_id].get(stream_type, 0) + 1
+
+                print(f"✅ Successfully switched stream types for session {session_id}")
+                return True
+        except asyncio.TimeoutError:
+            print(f"❌ Stream type switch timed out for session {session_id}")
+            raise RealSenseError(status_code=500, detail="Stream type switch operation timed out")
+        except Exception as e:
+            print(f"❌ Error switching stream types for session {session_id}: {str(e)}")
+            raise RealSenseError(status_code=500, detail=f"Failed to switch stream types: {str(e)}")
 
     async def close_session(self, session_id: str) -> bool:
         """Close a WebRTC session."""

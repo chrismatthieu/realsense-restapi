@@ -23,6 +23,7 @@ class RobotWebSocketClient:
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 5
         self.reconnect_delay = 5  # seconds
+        self.webrtc_manager = None  # Will be initialized when needed
         
     async def connect(self):
         """Connect to cloud signaling server"""
@@ -70,6 +71,7 @@ class RobotWebSocketClient:
             
         # Use direct event listeners instead of decorators
         self.sio.on('create-session', self.handle_create_session_direct)
+        self.sio.on('switch-stream-type', self.handle_switch_stream_type_direct)
         self.sio.on('webrtc-answer', self.handle_webrtc_answer_direct)
         self.sio.on('ice-candidate', self.handle_ice_candidate_direct)
         
@@ -234,6 +236,16 @@ class RobotWebSocketClient:
             logger.error(f"❌ Error in direct ice-candidate handler: {e}")
             import traceback
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
+
+    async def handle_switch_stream_type_direct(self, data):
+        """Direct event handler for switch-stream-type (non-async)"""
+        logger.info(f"🎯 Direct switch-stream-type handler called with data: {data}")
+        try:
+            await self.handle_switch_stream_type(data)
+        except Exception as e:
+            logger.error(f"❌ Error in direct switch-stream-type handler: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
     
     async def handle_create_session(self, data: Dict[str, Any]):
         """Handle WebRTC session creation request"""
@@ -257,8 +269,8 @@ class RobotWebSocketClient:
             realsense_manager = get_realsense_manager()
             
             # Create WebRTC offer using local WebRTC manager
-            webrtc_manager = WebRTCManager(realsense_manager)
-            offer_response = await webrtc_manager.create_offer(device_id, stream_types)
+            self.webrtc_manager = WebRTCManager(realsense_manager)
+            offer_response = await self.webrtc_manager.create_offer(device_id, stream_types)
             
             if offer_response:
                 api_session_id, offer_dict = offer_response
@@ -270,7 +282,7 @@ class RobotWebSocketClient:
                     "deviceId": device_id,
                     "streamTypes": stream_types,
                     "apiSessionId": api_session_id,
-                    "webrtcManager": webrtc_manager,
+                    "webrtcManager": self.webrtc_manager,
                     "createdAt": datetime.now()
                 }
                 
@@ -293,6 +305,74 @@ class RobotWebSocketClient:
             logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             await self.sio.emit('session-error', {
                 "sessionId": session_id,
+                "error": str(e)
+            })
+
+    async def handle_switch_stream_type(self, data: Dict[str, Any]):
+        """Handle stream type switching within an existing session"""
+        cloud_session_id = data.get('sessionId')
+        new_stream_types = data.get('streamTypes', [])
+        
+        if not cloud_session_id or not new_stream_types:
+            logger.error(f"❌ Invalid switch-stream-type data: {data}")
+            return
+
+        logger.info(f"🔄 Switching stream types for session {cloud_session_id} to: {new_stream_types}")
+        
+        # Get the session data to find the API session ID
+        session_data = self.sessions.get(cloud_session_id)
+        if not session_data:
+            logger.error(f"❌ Session {cloud_session_id} not found in local sessions")
+            await self.sio.emit('stream-type-switch-error', {
+                'sessionId': cloud_session_id,
+                'error': 'Session not found'
+            })
+            return
+        
+        api_session_id = session_data.get('apiSessionId')
+        if not api_session_id:
+            logger.error(f"❌ API session ID not found for cloud session {cloud_session_id}")
+            await self.sio.emit('stream-type-switch-error', {
+                'sessionId': cloud_session_id,
+                'error': 'API session ID not found'
+            })
+            return
+        
+        logger.info(f"🔄 Using API session ID {api_session_id} for stream type switch")
+        
+        # Get the WebRTC manager from the session data
+        webrtc_manager = session_data.get('webrtcManager')
+        if not webrtc_manager:
+            logger.error(f"❌ WebRTC manager not found for cloud session {cloud_session_id}")
+            await self.sio.emit('stream-type-switch-error', {
+                'sessionId': cloud_session_id,
+                'error': 'WebRTC manager not found'
+            })
+            return
+        
+        try:
+            # Switch stream types in the existing session using API session ID
+            success = await webrtc_manager.switch_stream_type(api_session_id, new_stream_types)
+            
+            if success:
+                logger.info(f"✅ Successfully switched stream types for session {cloud_session_id}")
+                await self.sio.emit('stream-type-switched', {
+                    "sessionId": cloud_session_id,
+                    "streamTypes": new_stream_types
+                })
+            else:
+                logger.error(f"❌ Failed to switch stream types for session {cloud_session_id}")
+                await self.sio.emit('stream-type-switch-error', {
+                    "sessionId": cloud_session_id,
+                    "error": "Failed to switch stream types"
+                })
+                
+        except Exception as e:
+            logger.error(f"❌ Error switching stream types for session {cloud_session_id}: {e}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+            await self.sio.emit('stream-type-switch-error', {
+                "sessionId": cloud_session_id,
                 "error": str(e)
             })
             

@@ -178,6 +178,17 @@ class CloudSignalingService {
     this.socket.emit('close-session', { sessionId });
   }
 
+  switchStreamType(sessionId, streamTypes) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to cloud server');
+    }
+
+    console.log(`🔄 Switching stream type for session ${sessionId} to ${streamTypes}`);
+    console.log(`📡 Emitting switch-stream-type event:`, { sessionId, streamTypes });
+    this.socket.emit('switch-stream-type', { sessionId, streamTypes });
+    console.log(`✅ switch-stream-type event emitted`);
+  }
+
   getAvailableRobots() {
     return this.availableRobots;
   }

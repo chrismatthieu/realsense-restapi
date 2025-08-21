@@ -131,6 +131,29 @@ class CloudSignalingServer {
         });
       });
 
+      // Handle stream type switching (from client to robot)
+      socket.on('switch-stream-type', (data) => {
+        console.log(`📡 Received switch-stream-type event:`, data);
+        const { sessionId, streamTypes } = data;
+        const session = this.sessions.get(sessionId);
+        
+        if (!session) {
+          console.log(`❌ Session not found for switch-stream-type: ${sessionId}`);
+          socket.emit('stream-type-switch-error', { error: 'Session not found' });
+          return;
+        }
+
+        console.log(`🔄 Switching stream type for session ${sessionId} to ${streamTypes}`);
+        console.log(`📤 Forwarding switch-stream-type to robot:`, { sessionId, streamTypes });
+        
+        // Forward to robot
+        session.robotSocket.emit('switch-stream-type', {
+          sessionId,
+          streamTypes
+        });
+        console.log(`✅ switch-stream-type forwarded to robot`);
+      });
+
       // Handle WebRTC offer (from robot to client)
       socket.on('webrtc-offer', (data) => {
         const { sessionId, offer } = data;

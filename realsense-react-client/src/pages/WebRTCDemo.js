@@ -159,6 +159,34 @@ const WebRTCDemo = () => {
     }
   };
 
+  const switchStreamType = async (newStreamType) => {
+    logMessage(`🔍 switchStreamType called with: ${newStreamType}`);
+    logMessage(`🔍 Session ID: ${sessionIdRef.current}, Connected: ${isConnected}`);
+    
+    if (!sessionIdRef.current || !isConnected) {
+      logMessage('❌ No active session to switch');
+      return;
+    }
+
+    try {
+      logMessage(`🔄 Switching stream type to: ${newStreamType}`);
+      updateStatus(`Switching to ${newStreamType}...`, 'info');
+      
+      // Switch stream type via cloud server
+      logMessage(`📡 Calling cloudSignalingService.switchStreamType(${sessionIdRef.current}, [${newStreamType}])`);
+      await cloudSignalingService.switchStreamType(sessionIdRef.current, [newStreamType]);
+      
+      // Update local state
+      setStreamType(newStreamType);
+      updateStatus(`Switched to ${newStreamType}`, 'success');
+      logMessage(`✅ Successfully switched to ${newStreamType}`);
+      
+    } catch (error) {
+      logMessage(`❌ Failed to switch stream type: ${error.message}`);
+      updateStatus(`Failed to switch stream type: ${error.message}`, 'error');
+    }
+  };
+
   const stopStream = async () => {
     try {
       if (sessionIdRef.current) {
@@ -339,7 +367,19 @@ const WebRTCDemo = () => {
           <select
             id="streamType"
             value={streamType}
-            onChange={(e) => setStreamType(e.target.value)}
+            onChange={(e) => {
+              const newStreamType = e.target.value;
+              setStreamType(newStreamType);
+              
+              // If we have an active session, switch stream type instead of creating new session
+              if (isConnected && sessionIdRef.current) {
+                logMessage(`🔄 Attempting to switch stream type from ${streamType} to ${newStreamType}`);
+                logMessage(`Session ID: ${sessionIdRef.current}, Connected: ${isConnected}`);
+                switchStreamType(newStreamType);
+              } else {
+                logMessage(`⚠️ Cannot switch stream type - Session: ${sessionIdRef.current}, Connected: ${isConnected}`);
+              }
+            }}
           >
             <option value="color">Color</option>
             <option value="depth">Depth</option>
