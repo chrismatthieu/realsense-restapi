@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import axios from 'axios';
-import signalingService from '../services/signalingService';
+import cloudSignalingService from '../services/cloudSignalingService';
 
 const PointCloudDemo = () => {
-  const [apiUrl, setApiUrl] = useState('http://localhost:8000/api');
-  const [deviceId, setDeviceId] = useState('');
+  const [robots, setRobots] = useState([]);
+  const [selectedRobot, setSelectedRobot] = useState('');
   const [isViewerRunning, setIsViewerRunning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+  const [sessionId, setSessionId] = useState(null);
   const [pointCloudStatus, setPointCloudStatus] = useState('Stopped');
   const [vertexCount, setVertexCount] = useState(0);
   const [fps, setFps] = useState(0);
-  const [signalingConnected, setSignalingConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   
   // Use ref to track running state for intervals
   const isViewerRunningRef = useRef(false);
@@ -25,6 +25,7 @@ const PointCloudDemo = () => {
   const rendererRef = useRef(null);
   const controlsRef = useRef(null);
   const pointCloudRef = useRef(null);
+  const peerConnectionRef = useRef(null);
   const animationIdRef = useRef(null);
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef(0);
@@ -34,6 +35,33 @@ const PointCloudDemo = () => {
     const timestamp = new Date().toLocaleTimeString();
     setLog(prev => `[${timestamp}] ${message}\n${prev}`);
   }, []);
+
+  const discoverRobots = async () => {
+    try {
+      logMessage('🔍 Discovering available robots...');
+      const availableRobots = await cloudSignalingService.getAvailableRobots();
+      setRobots(availableRobots);
+      logMessage(`✅ Found ${availableRobots.length} robot(s): ${availableRobots.map(r => r.robotId).join(', ')}`);
+    } catch (error) {
+      logMessage(`❌ Failed to discover robots: ${error.message}`);
+    }
+  };
+
+  const connectToCloud = async () => {
+    try {
+      logMessage('🌐 Connecting to cloud signaling server...');
+      await cloudSignalingService.connect();
+      setIsConnected(true);
+      setConnectionStatus('Connected');
+      logMessage('✅ Connected to cloud signaling server');
+      
+      // Discover robots after connecting
+      await discoverRobots();
+    } catch (error) {
+      logMessage(`❌ Failed to connect to cloud: ${error.message}`);
+      setConnectionStatus('Connection Failed');
+    }
+  };
 
   const initThreeJS = () => {
     if (!canvasRef.current) return;
@@ -91,120 +119,12 @@ const PointCloudDemo = () => {
   };
 
   const updatePointCloud = async () => {
-    if (!isViewerRunningRef.current || !deviceId) return;
-
-    try {
-      logMessage(`Fetching point cloud data for device: ${deviceId}`);
-      const data = await signalingService.getPointCloudData(deviceId);
-
-      logMessage(`Received data: ${JSON.stringify(data).substring(0, 200)}...`);
-      logMessage(`Data type: ${typeof data}, vertices type: ${typeof data.vertices}`);
-
-      if (!data.vertices || data.vertices.length === 0) {
-        logMessage('No vertices data found');
-        setPointCloudStatus('No data');
-        return;
-      }
-
-      logMessage(`Vertices array length: ${data.vertices.length}`);
-      
-      // Handle different data formats
-      let vertexArray;
-      if (Array.isArray(data.vertices)) {
-        // Direct array format
-        vertexArray = data.vertices;
-      } else if (typeof data.vertices === 'string') {
-        // Base64 encoded format - skip for now
-        logMessage('Received base64 encoded data, skipping this update');
-        return;
-      } else {
-        logMessage('Unknown vertices format, skipping this update');
-        return;
-      }
-      
-      // Flatten the array and filter out NaN values
-      const flatVertices = [];
-      for (let i = 0; i < vertexArray.length; i++) {
-        const vertex = vertexArray[i];
-        if (Array.isArray(vertex) && vertex.length === 3) {
-          const [x, y, z] = vertex;
-          if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
-              isFinite(x) && isFinite(y) && isFinite(z)) {
-            flatVertices.push(x, y, z);
-          }
-        }
-      }
-      
-      if (flatVertices.length === 0) {
-        logMessage('No valid vertices found after filtering');
-        return;
-      }
-      
-      const vertices = new Float32Array(flatVertices);
-      logMessage(`Valid vertices: ${flatVertices.length / 3}, filtered from ${vertexArray.length} input vertices`);
-      
-      // Debug: Show first few vertices
-      if (flatVertices.length > 0) {
-        logMessage(`First vertex: [${flatVertices[0]}, ${flatVertices[1]}, ${flatVertices[2]}]`);
-        if (flatVertices.length >= 6) {
-          logMessage(`Second vertex: [${flatVertices[3]}, ${flatVertices[4]}, ${flatVertices[5]}]`);
-        }
-      }
-      
-      setVertexCount(vertices.length / 3);
-
-      // Store current camera state
-      const currentCameraPosition = cameraRef.current.position.clone();
-      const currentTarget = controlsRef.current.target.clone();
-
-      // Remove existing point cloud
-      if (pointCloudRef.current) {
-        sceneRef.current.remove(pointCloudRef.current);
-        pointCloudRef.current.geometry.dispose();
-        pointCloudRef.current.material.dispose();
-      }
-
-      // Create new geometry
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      logMessage(`Created geometry with ${geometry.attributes.position.count} vertices`);
-
-      // Create material
-      const material = new THREE.PointsMaterial({
-        size: 0.01, // Smaller points
-        color: 0x00ff00,
-        transparent: true,
-        opacity: 1.0, // Full opacity
-        sizeAttenuation: true
-      });
-      logMessage('Created point cloud material');
-
-      // Create point cloud
-      const pointCloud = new THREE.Points(geometry, material);
-      sceneRef.current.add(pointCloud);
-      pointCloudRef.current = pointCloud;
-      logMessage(`Added point cloud to scene. Scene children count: ${sceneRef.current.children.length}`);
-
-      // Preserve camera state
-      if (!hasInitializedCameraRef.current) {
-        // Initial setup
-        cameraRef.current.position.set(0, 0, 2);
-        controlsRef.current.target.set(0, 0, 0);
-        hasInitializedCameraRef.current = true;
-        logMessage(`Initialized camera at position: ${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z}`);
-      } else {
-        // Preserve user's view
-        cameraRef.current.position.copy(currentCameraPosition);
-        controlsRef.current.target.copy(currentTarget);
-        logMessage(`Preserved camera at position: ${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z}`);
-      }
-
-      setPointCloudStatus('Streaming');
-      logMessage(`Updated point cloud with ${vertices.length / 3} vertices`);
-
-    } catch (error) {
-      logMessage(`Error updating point cloud: ${error.message}`);
-      setPointCloudStatus('Error');
+    // This function is now deprecated - point cloud data comes through WebRTC data channels
+    if (!isViewerRunningRef.current || !selectedRobot) return;
+    
+    // Just log that we're using WebRTC data channels now
+    if (Math.random() < 0.1) { // Only log occasionally to avoid spam
+      logMessage('📡 Point cloud data now comes through WebRTC data channels');
     }
   };
 
@@ -237,12 +157,14 @@ const PointCloudDemo = () => {
   };
 
   const startPointCloudViewer = async () => {
-    if (!deviceId) {
-      alert('Please enter a device ID');
+    if (!selectedRobot) {
+      alert('Please select a robot first');
       return;
     }
 
     try {
+      const deviceId = selectedRobot.replace('robot-', '');
+      
       // Initialize Three.js if not already done
       if (!sceneRef.current) {
         initThreeJS();
@@ -262,22 +184,61 @@ const PointCloudDemo = () => {
       setPointCloudStatus('Activating...');
       logMessage('Starting 3D point cloud viewer...');
 
-      // Automatically activate point cloud processing
+      // Start a WebRTC session for depth stream to enable point cloud data
       try {
+        logMessage('Starting WebRTC depth stream session...');
+        const sessionData = await cloudSignalingService.createSession(selectedRobot, deviceId, ['depth']);
+        const newSessionId = sessionData.sessionId;
+        const offer = sessionData.offer;
+        setSessionId(newSessionId);
+        logMessage(`WebRTC depth session created: ${newSessionId}`);
+
+        // Create RTCPeerConnection
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        peerConnectionRef.current = pc;
+
+        // Handle ICE candidates
+        pc.onicecandidate = async (event) => {
+          if (event.candidate) {
+            try {
+              await cloudSignalingService.sendIceCandidate(newSessionId, event.candidate);
+            } catch (error) {
+              logMessage(`Failed to send ICE candidate: ${error.message}`);
+            }
+          }
+        };
+
+        // Handle connection state changes
+        pc.onconnectionstatechange = () => {
+          logMessage(`📡 Peer connection state: ${pc.connectionState}`);
+        };
+
+        // Handle ICE connection state changes
+        pc.oniceconnectionstatechange = () => {
+          logMessage(`🧊 ICE connection state: ${pc.iceConnectionState}`);
+        };
+
+        // Set remote description
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        // Create answer
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+                // Send answer via cloud server
+        logMessage(`Sending answer for session: ${newSessionId}`);
+        await cloudSignalingService.sendAnswer(newSessionId, answer);
+        
+        // Activate point cloud processing
         logMessage('Activating point cloud processing...');
-        await signalingService.activatePointCloud(deviceId, true);
+        await cloudSignalingService.activatePointCloud(deviceId, true);
         logMessage('Point cloud processing activated');
 
-        // Start a depth stream session to enable point cloud data
-        logMessage('Starting depth stream session...');
-        await signalingService.startDeviceStream(deviceId, [{
-          sensor_id: `${deviceId}-sensor-0`,
-          stream_type: 'depth',
-          format: 'z16',
-          resolution: { width: 640, height: 480 },
-          framerate: 30
-        }]);
-        logMessage('Depth stream session started');
+        // Setup WebRTC data channel listener
+        logMessage('Setting up WebRTC data channel listener...');
+        setupWebRTCDataChannel(newSessionId);
 
       } catch (error) {
         logMessage(`Warning: ${error.message}`);
@@ -304,26 +265,243 @@ const PointCloudDemo = () => {
     }
   };
 
+  // State for chunked message reassembly
+  const [chunkedMessages, setChunkedMessages] = useState(new Map());
+
+  const handleChunkedPointCloudData = (chunkData) => {
+    const { message_id, chunk_index, total_chunks, is_last_chunk, vertices } = chunkData;
+    
+    logMessage(`📡 Received chunk ${chunk_index + 1}/${total_chunks} for message ${message_id} with ${vertices.length} vertices`);
+    
+    // Get or create message buffer for this message ID
+    setChunkedMessages(prev => {
+      const newMessages = new Map(prev);
+      
+      if (!newMessages.has(message_id)) {
+        newMessages.set(message_id, {
+          allVertices: [],
+          receivedChunks: 0,
+          totalChunks: total_chunks,
+          totalVertices: chunkData.total_vertices
+        });
+      }
+      
+      const messageBuffer = newMessages.get(message_id);
+      messageBuffer.allVertices.push(...vertices);
+      messageBuffer.receivedChunks++;
+      
+      // Check if we have all chunks
+      if (messageBuffer.receivedChunks === total_chunks) {
+        logMessage(`📡 All chunks received for message ${message_id}, updating point cloud with ${messageBuffer.allVertices.length} vertices`);
+        logMessage(`📡 Data sample: ${JSON.stringify(messageBuffer.allVertices.slice(0, 3))}`);
+        
+        // Update the point cloud with the complete data
+        updatePointCloudWithData(messageBuffer.allVertices);
+        
+        // Update status to active
+        setPointCloudStatus('Active');
+        
+        // Remove the message buffer
+        newMessages.delete(message_id);
+      }
+      
+      return newMessages;
+    });
+  };
+
+  const setupWebRTCDataChannel = (sessionId) => {
+    try {
+      // Get the WebRTC peer connection from the ref
+      const peerConnection = peerConnectionRef.current;
+      
+      if (!peerConnection) {
+        logMessage('❌ No peer connection available for data channel');
+        return;
+      }
+
+      // Listen for data channel from the server
+      peerConnection.ondatachannel = (event) => {
+        const dataChannel = event.channel;
+        logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
+        
+        if (dataChannel.label === 'pointcloud-data') {
+          logMessage('📡 WebRTC data channel opened for point cloud data');
+          
+          dataChannel.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              logMessage(`📡 Raw data received: ${JSON.stringify(data).substring(0, 200)}...`);
+              
+              if (data.type === 'pointcloud-data' && data.vertices) {
+                // Check if this is a chunked message
+                if (data.chunk_info) {
+                  // Handle chunked point cloud data
+                  handleChunkedPointCloudData(data);
+                } else {
+                  // Handle single message (small data)
+                  logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
+                  logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
+                  
+                  // Update the point cloud with the received data
+                  updatePointCloudWithData(data.vertices);
+                  
+                  // Update status to active
+                  setPointCloudStatus('Active');
+                }
+              }
+            } catch (error) {
+              logMessage(`❌ Error parsing point cloud data: ${error.message}`);
+            }
+          };
+
+          dataChannel.onclose = () => {
+            logMessage('📡 WebRTC data channel closed');
+          };
+
+          dataChannel.onerror = (error) => {
+            logMessage(`❌ WebRTC data channel error: ${error.message}`);
+          };
+        }
+      };
+
+      logMessage('✅ WebRTC data channel setup complete');
+
+    } catch (error) {
+      logMessage(`❌ Error setting up WebRTC data channel: ${error.message}`);
+    }
+  };
+
+  const updatePointCloudWithData = (vertices) => {
+    try {
+      if (!vertices || vertices.length === 0) {
+        logMessage('No vertices data received');
+        return;
+      }
+
+      // Flatten the array and filter out NaN values
+      const flatVertices = [];
+      let validCount = 0;
+      let invalidCount = 0;
+      
+      for (let i = 0; i < vertices.length; i++) {
+        const vertex = vertices[i];
+        if (Array.isArray(vertex) && vertex.length === 3) {
+          const [x, y, z] = vertex;
+          if (!isNaN(x) && !isNaN(y) && !isNaN(z) && 
+              isFinite(x) && isFinite(y) && isFinite(z)) {
+            flatVertices.push(x, y, z);
+            validCount++;
+          } else {
+            invalidCount++;
+          }
+        } else {
+          invalidCount++;
+        }
+      }
+      
+      logMessage(`Data processing: ${validCount} valid vertices, ${invalidCount} invalid vertices`);
+      
+      if (flatVertices.length === 0) {
+        logMessage('No valid vertices found after filtering');
+        return;
+      }
+      
+      const vertexArray = new Float32Array(flatVertices);
+      logMessage(`Valid vertices: ${flatVertices.length / 3}, filtered from ${vertices.length} input vertices`);
+      
+      setVertexCount(vertexArray.length / 3);
+
+      // Store current camera state
+      const currentCameraPosition = cameraRef.current.position.clone();
+      const currentTarget = controlsRef.current.target.clone();
+
+      // Remove existing point cloud
+      if (pointCloudRef.current) {
+        sceneRef.current.remove(pointCloudRef.current);
+        pointCloudRef.current.geometry.dispose();
+        pointCloudRef.current.material.dispose();
+      }
+
+      // Create new geometry
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(vertexArray, 3));
+      logMessage(`Created geometry with ${geometry.attributes.position.count} vertices`);
+      logMessage(`Geometry bounds: ${JSON.stringify(geometry.boundingBox)}`);
+
+      // Create material
+      const material = new THREE.PointsMaterial({
+        size: 0.01,
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 1.0,
+        sizeAttenuation: true
+      });
+
+      // Create point cloud
+      const pointCloud = new THREE.Points(geometry, material);
+      sceneRef.current.add(pointCloud);
+      pointCloudRef.current = pointCloud;
+      logMessage(`Added point cloud to scene. Scene children count: ${sceneRef.current.children.length}`);
+      logMessage(`Point cloud visible: ${pointCloud.visible}, position: ${pointCloud.position.x}, ${pointCloud.position.y}, ${pointCloud.position.z}`);
+      
+      // Check if point cloud is in camera view
+      const frustum = new THREE.Frustum();
+      const matrix = new THREE.Matrix4().multiplyMatrices(cameraRef.current.projectionMatrix, cameraRef.current.matrixWorldInverse);
+      frustum.setFromProjectionMatrix(matrix);
+      
+      const boundingBox = new THREE.Box3().setFromObject(pointCloud);
+      const inView = frustum.intersectsBox(boundingBox);
+      logMessage(`Point cloud in camera view: ${inView}, bounding box: ${JSON.stringify(boundingBox)}`);
+
+      // Preserve camera state
+      if (!hasInitializedCameraRef.current) {
+        cameraRef.current.position.set(0, 0, 2);
+        controlsRef.current.target.set(0, 0, 0);
+        hasInitializedCameraRef.current = true;
+        logMessage(`Camera initialized at position: ${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z}`);
+      } else {
+        cameraRef.current.position.copy(currentCameraPosition);
+        controlsRef.current.target.copy(currentTarget);
+        logMessage(`Camera restored to position: ${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z}`);
+      }
+      
+      // Log camera frustum for debugging
+      logMessage(`Camera near: ${cameraRef.current.near}, far: ${cameraRef.current.far}, fov: ${cameraRef.current.fov}`);
+
+      setPointCloudStatus('Streaming');
+      logMessage(`Updated point cloud with ${vertexArray.length / 3} vertices`);
+      logMessage(`Scene now contains ${sceneRef.current.children.length} objects`);
+      logMessage(`Point cloud visible: ${pointCloud.visible}, position: ${pointCloud.position.x}, ${pointCloud.position.y}, ${pointCloud.position.z}`);
+
+    } catch (error) {
+      logMessage(`Error updating point cloud with data: ${error.message}`);
+      setPointCloudStatus('Error');
+    }
+  };
+
   const resetDevice = async () => {
-    if (!deviceId) {
-      alert('Please enter a device ID');
+    if (!selectedRobot) {
+      alert('Please select a robot first');
       return;
     }
 
     try {
+      const deviceId = selectedRobot.replace('robot-', '');
       logMessage('Resetting device...');
       
-      // Stop any active streams
-      try {
-        await signalingService.stopDeviceStream(deviceId);
-        logMessage('Stopped active streams');
-      } catch (error) {
-        logMessage(`Warning: ${error.message}`);
+      // Close WebRTC session if exists
+      if (sessionId) {
+        try {
+          await cloudSignalingService.closeSession(sessionId);
+          logMessage('Closed WebRTC session');
+        } catch (error) {
+          logMessage(`Warning: ${error.message}`);
+        }
       }
       
       // Deactivate point cloud processing
       try {
-        await signalingService.activatePointCloud(deviceId, false);
+        await cloudSignalingService.activatePointCloud(deviceId, false);
         logMessage('Deactivated point cloud processing');
       } catch (error) {
         logMessage(`Warning: ${error.message}`);
@@ -365,54 +543,44 @@ const PointCloudDemo = () => {
       pointCloudRef.current = null;
     }
 
+    // Close WebRTC peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+      logMessage('Closed WebRTC peer connection');
+    }
+
     // Reset camera initialization flag
     hasInitializedCameraRef.current = false;
 
-    // Clean up depth session if it exists
-    if (deviceId) {
-            try {
-        logMessage('Cleaning up depth session...');
-        await signalingService.stopDeviceStream(deviceId);
-        logMessage('Depth session cleaned up');
+    // Clean up WebRTC session if it exists
+    if (sessionId) {
+      try {
+        logMessage('Cleaning up WebRTC session...');
+        await cloudSignalingService.closeSession(sessionId);
+        logMessage('WebRTC session cleaned up');
     
         // Also deactivate point cloud processing
         logMessage('Deactivating point cloud processing...');
-        await signalingService.activatePointCloud(deviceId, false);
+        const deviceId = selectedRobot.replace('robot-', '');
+        await cloudSignalingService.activatePointCloud(deviceId, false);
         logMessage('Point cloud processing deactivated');
     
         // Wait a moment for cleanup to complete
         await new Promise(resolve => setTimeout(resolve, 500));
     
       } catch (error) {
-        logMessage(`Warning: Failed to clean up depth session: ${error.message}`);
+        logMessage(`Warning: Failed to clean up WebRTC session: ${error.message}`);
       }
     }
+    
+    // Clear session ID
+    setSessionId(null);
 
     logMessage('3D point cloud viewer stopped');
   };
 
-  const discoverDevices = useCallback(async () => {
-    try {
-      logMessage('Discovering devices...');
-      logMessage(`Making request to: ${apiUrl}/devices/`);
-      
-      const response = await axios.get(`${apiUrl}/devices/`);
-      logMessage(`Response status: ${response.status}`);
-      logMessage(`Response data: ${JSON.stringify(response.data)}`);
-      
-      const devices = response.data;
-      
-      if (devices.length > 0) {
-        setDeviceId(devices[0].device_id);
-        logMessage(`Found ${devices.length} device(s): ${devices.map(d => d.device_id).join(', ')}`);
-      } else {
-        logMessage('No devices found');
-      }
-    } catch (error) {
-      logMessage(`Failed to discover devices: ${error.message}`);
-      logMessage(`Error details: ${JSON.stringify(error.response?.data || error)}`);
-    }
-  }, [apiUrl, logMessage]);
+
 
   const handleKeyPress = useCallback((event) => {
     if (event.key === 'r' || event.key === 'R') {
@@ -427,20 +595,11 @@ const PointCloudDemo = () => {
   }, [logMessage]);
 
   useEffect(() => {
-    // Connect to signaling server
-    const connectToSignaling = async () => {
-      try {
-        await signalingService.connect();
-        setSignalingConnected(true);
-        logMessage('Connected to signaling server');
-      } catch (error) {
-        logMessage(`Failed to connect to signaling server: ${error.message}`);
-        setSignalingConnected(false);
-      }
-    };
+    // Initialize Three.js on component mount
+    initThreeJS();
 
-    connectToSignaling();
-    discoverDevices();
+    // Connect to cloud server on mount
+    connectToCloud();
     window.addEventListener('keydown', handleKeyPress);
 
     return () => {
@@ -453,19 +612,20 @@ const PointCloudDemo = () => {
       }
       
       // Cleanup on unmount
-      if (deviceId) {
+      if (selectedRobot) {
+        const deviceId = selectedRobot.replace('robot-', '');
         // Clean up any active streams
         try {
-          signalingService.stopDeviceStream(deviceId);
-          signalingService.activatePointCloud(deviceId, false);
+          cloudSignalingService.stopDeviceStream(deviceId);
+          cloudSignalingService.activatePointCloud(deviceId, false);
         } catch (error) {
           // Ignore cleanup errors on unmount
         }
       }
       
-      signalingService.disconnect();
+      cloudSignalingService.disconnect();
     };
-  }, [discoverDevices, handleKeyPress]);
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {
@@ -490,35 +650,30 @@ const PointCloudDemo = () => {
         <p>Interactive 3D visualization of RealSense depth data</p>
         
         <div className="form-group">
-          <label htmlFor="apiUrl">API URL:</label>
-          <input
-            type="text"
-            id="apiUrl"
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-            placeholder="Enter API URL"
-          />
-        </div>
-        
-        <div className="form-group">
-          <label htmlFor="deviceId">Device ID:</label>
-          <input
-            type="text"
-            id="deviceId"
-            value={deviceId}
-            onChange={(e) => setDeviceId(e.target.value)}
-            placeholder="e.g., 844212070924"
-          />
+          <label htmlFor="robotSelect">Select Robot:</label>
+          <select
+            id="robotSelect"
+            value={selectedRobot}
+            onChange={(e) => setSelectedRobot(e.target.value)}
+            disabled={!isConnected}
+          >
+            <option value="">Select a robot...</option>
+            {robots.map((robot) => (
+              <option key={robot.robotId} value={robot.robotId}>
+                {robot.robotId} - {robot.deviceInfo?.name || 'Unknown Device'}
+              </option>
+            ))}
+          </select>
         </div>
         
         <div>
-          <button onClick={discoverDevices} className="button">
-            🔍 Discover Devices
+          <button onClick={discoverRobots} className="button" disabled={!isConnected}>
+            🔍 Discover Robots
           </button>
           <button 
             onClick={startPointCloudViewer} 
             className="button success"
-            disabled={isViewerRunning}
+            disabled={isViewerRunning || !selectedRobot}
           >
             ▶️ Start 3D Viewer
           </button>
@@ -532,6 +687,7 @@ const PointCloudDemo = () => {
           <button 
             onClick={resetDevice} 
             className="button warning"
+            disabled={!selectedRobot}
           >
             🔄 Reset Device
           </button>
@@ -539,14 +695,14 @@ const PointCloudDemo = () => {
 
         <div className="status info">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span><strong>Connection:</strong> {connectionStatus}</span>
+            <span><strong>Cloud Connection:</strong> {isConnected ? 'Connected' : 'Disconnected'}</span>
             <span><strong>Point Cloud:</strong> {pointCloudStatus}</span>
             <span><strong>Vertices:</strong> {vertexCount.toLocaleString()}</span>
             <span><strong>FPS:</strong> {fps}</span>
           </div>
         </div>
-        <div className={`status ${signalingConnected ? 'success' : 'error'}`}>
-          📡 Signaling Server: {signalingConnected ? 'Connected' : 'Disconnected'}
+        <div className={`status ${isConnected ? 'success' : 'error'}`}>
+          🌐 Cloud Signaling Server: {isConnected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
 

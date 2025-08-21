@@ -189,8 +189,80 @@ class CloudSignalingService {
     console.log(`✅ switch-stream-type event emitted`);
   }
 
+  getPointCloudData(deviceId) {
+    return new Promise((resolve, reject) => {
+      if (!this.isConnected) {
+        reject(new Error('Not connected to cloud server'));
+        return;
+      }
+
+      console.log(`📊 Requesting point cloud data for device ${deviceId}`);
+      
+      const timeout = setTimeout(() => {
+        this.removeEventListener('pointcloud-data', dataHandler);
+        this.removeEventListener('pointcloud-error', errorHandler);
+        reject(new Error('Point cloud data request timeout'));
+      }, 10000);
+
+      const dataHandler = (data) => {
+        clearTimeout(timeout);
+        this.removeEventListener('pointcloud-data', dataHandler);
+        this.removeEventListener('pointcloud-error', errorHandler);
+        resolve(data);
+      };
+
+      const errorHandler = (error) => {
+        clearTimeout(timeout);
+        this.removeEventListener('pointcloud-data', dataHandler);
+        this.removeEventListener('pointcloud-error', errorHandler);
+        reject(new Error(error.error || 'Point cloud data request failed'));
+      };
+
+      this.addEventListener('pointcloud-data', dataHandler);
+      this.addEventListener('pointcloud-error', errorHandler);
+
+      this.socket.emit('get-pointcloud-data', { deviceId });
+    });
+  }
+
+  activatePointCloud(deviceId, activate) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to cloud server');
+    }
+
+    console.log(`🎯 ${activate ? 'Activating' : 'Deactivating'} point cloud for device ${deviceId}`);
+    this.socket.emit('activate-pointcloud', { deviceId, activate });
+  }
+
+  startDeviceStream(deviceId, streamConfigs) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to cloud server');
+    }
+
+    console.log(`🚀 Starting device stream for ${deviceId} with configs:`, streamConfigs);
+    this.socket.emit('start-device-stream', { deviceId, streamConfigs });
+  }
+
+  stopDeviceStream(deviceId) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to cloud server');
+    }
+
+    console.log(`⏹️ Stopping device stream for ${deviceId}`);
+    this.socket.emit('stop-device-stream', { deviceId });
+  }
+
   getAvailableRobots() {
     return this.availableRobots;
+  }
+
+  getPeerConnection(sessionId) {
+    // This method should return the WebRTC peer connection for the given session
+    // For now, we'll need to access it from the WebRTC manager
+    if (window.webrtcManager && window.webrtcManager.sessions && window.webrtcManager.sessions[sessionId]) {
+      return window.webrtcManager.sessions[sessionId].pc;
+    }
+    return null;
   }
 
   addEventListener(event, callback) {

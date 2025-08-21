@@ -82,6 +82,45 @@ class CloudSignalingServer {
         });
       });
 
+      // Handle point cloud data responses (from robot to client)
+      socket.on('pointcloud-data', (data) => {
+        console.log(`📡 Received pointcloud-data response from robot:`, data);
+        // Forward to all clients (since we don't track which client requested it)
+        this.broadcastToClients('pointcloud-data', data);
+        console.log(`✅ pointcloud-data forwarded to clients`);
+      });
+
+      // Handle point cloud error responses (from robot to client)
+      socket.on('pointcloud-error', (data) => {
+        console.log(`📡 Received pointcloud-error response from robot:`, data);
+        // Forward to all clients (since we don't track which client requested it)
+        this.broadcastToClients('pointcloud-error', data);
+        console.log(`✅ pointcloud-error forwarded to clients`);
+      });
+
+      // Handle point cloud activation responses (from robot to client)
+      socket.on('pointcloud-activated', (data) => {
+        console.log(`📡 Received pointcloud-activated response from robot:`, data);
+        // Forward to all clients
+        this.broadcastToClients('pointcloud-activated', data);
+        console.log(`✅ pointcloud-activated forwarded to clients`);
+      });
+
+      // Handle device stream responses (from robot to client)
+      socket.on('device-stream-started', (data) => {
+        console.log(`📡 Received device-stream-started response from robot:`, data);
+        // Forward to all clients
+        this.broadcastToClients('device-stream-started', data);
+        console.log(`✅ device-stream-started forwarded to clients`);
+      });
+
+      socket.on('device-stream-stopped', (data) => {
+        console.log(`📡 Received device-stream-stopped response from robot:`, data);
+        // Forward to all clients
+        this.broadcastToClients('device-stream-stopped', data);
+        console.log(`✅ device-stream-stopped forwarded to clients`);
+      });
+
       // Handle client registration
       socket.on('client-register', (data) => {
         const { clientId } = data;
@@ -152,6 +191,90 @@ class CloudSignalingServer {
           streamTypes
         });
         console.log(`✅ switch-stream-type forwarded to robot`);
+      });
+
+      // Handle point cloud data requests (from client to robot)
+      socket.on('get-pointcloud-data', (data) => {
+        console.log(`📡 Received get-pointcloud-data event:`, data);
+        const { deviceId } = data;
+        
+        // Find robot for this device
+        const robotId = `robot-${deviceId}`;
+        const robotSocket = this.robots.get(robotId);
+        
+        if (!robotSocket) {
+          socket.emit('pointcloud-error', { error: 'Robot not found for device' });
+          return;
+        }
+      
+        console.log(`🔄 Requesting point cloud data for device ${deviceId} from robot ${robotId}`);
+        
+        // Forward to robot
+        robotSocket.emit('get-pointcloud-data', { deviceId });
+        console.log(`✅ get-pointcloud-data forwarded to robot`);
+      });
+
+      // Handle point cloud activation (from client to robot)
+      socket.on('activate-pointcloud', (data) => {
+        console.log(`📡 Received activate-pointcloud event:`, data);
+        const { deviceId, enabled = true } = data;
+        
+        // Find robot for this device
+        const robotId = `robot-${deviceId}`;
+        const robotSocket = this.robots.get(robotId);
+        
+        if (!robotSocket) {
+          socket.emit('pointcloud-error', { error: 'Robot not found for device' });
+          return;
+        }
+      
+        console.log(`🔄 ${enabled ? 'Activating' : 'Deactivating'} point cloud for device ${deviceId} via robot ${robotId}`);
+        
+        // Forward to robot
+        robotSocket.emit('activate-pointcloud', { deviceId, enabled });
+        console.log(`✅ activate-pointcloud forwarded to robot`);
+      });
+
+      // Handle device stream start (from client to robot)
+      socket.on('start-device-stream', (data) => {
+        console.log(`📡 Received start-device-stream event:`, data);
+        const { deviceId, streamConfigs } = data;
+        
+        // Find robot for this device
+        const robotId = `robot-${deviceId}`;
+        const robotSocket = this.robots.get(robotId);
+        
+        if (!robotSocket) {
+          socket.emit('pointcloud-error', { error: 'Robot not found for device' });
+          return;
+        }
+      
+        console.log(`🔄 Starting device stream for ${deviceId} via robot ${robotId}`);
+        
+        // Forward to robot
+        robotSocket.emit('start-device-stream', { deviceId, streamConfigs });
+        console.log(`✅ start-device-stream forwarded to robot`);
+      });
+
+      // Handle device stream stop (from client to robot)
+      socket.on('stop-device-stream', (data) => {
+        console.log(`📡 Received stop-device-stream event:`, data);
+        const { deviceId } = data;
+        
+        // Find robot for this device
+        const robotId = `robot-${deviceId}`;
+        const robotSocket = this.robots.get(robotId);
+        
+        if (!robotSocket) {
+          socket.emit('pointcloud-error', { error: 'Robot not found for device' });
+          return;
+        }
+      
+        console.log(`🔄 Stopping device stream for ${deviceId} via robot ${robotId}`);
+        
+        // Forward to robot
+        robotSocket.emit('stop-device-stream', { deviceId });
+        console.log(`✅ stop-device-stream forwarded to robot`);
       });
 
       // Handle WebRTC offer (from robot to client)

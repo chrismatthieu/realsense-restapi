@@ -22,6 +22,7 @@ class RobotWebSocketClient:
         self.sessions = {}  # sessionId -> session data
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 5
+        self.response_queue = []  # Queue to store responses when disconnected
         self.reconnect_delay = 5  # seconds
         self.webrtc_manager = None  # Will be initialized when needed
         
@@ -37,7 +38,7 @@ class RobotWebSocketClient:
             await self.sio.connect(
                 self.cloud_url,
                 wait_timeout=10,
-                transports=['websocket']
+                transports=['websocket', 'polling']
             )
             self.connected = True
             self.reconnect_attempts = 0
@@ -61,6 +62,8 @@ class RobotWebSocketClient:
             self.connected = True
             self.reconnect_attempts = 0
             await self.register_robot()
+            # Send any queued responses
+            await self.send_queued_responses()
             
         @self.sio.event
         async def disconnect():
@@ -74,6 +77,10 @@ class RobotWebSocketClient:
         self.sio.on('switch-stream-type', self.handle_switch_stream_type_direct)
         self.sio.on('webrtc-answer', self.handle_webrtc_answer_direct)
         self.sio.on('ice-candidate', self.handle_ice_candidate_direct)
+        self.sio.on('get-pointcloud-data', self.handle_get_pointcloud_data_direct)
+        self.sio.on('activate-pointcloud', self.handle_activate_pointcloud_direct)
+        self.sio.on('start-device-stream', self.handle_start_device_stream_direct)
+        self.sio.on('stop-device-stream', self.handle_stop_device_stream_direct)
         
         @self.sio.event
         async def create_session(data):
@@ -162,6 +169,27 @@ class RobotWebSocketClient:
             
         except Exception as e:
             logger.error(f"❌ Failed to register robot: {e}")
+
+    async def send_queued_responses(self):
+        """Send any queued responses when connection is restored."""
+        if not self.response_queue:
+            return
+            
+        logger.info(f"📤 Sending {len(self.response_queue)} queued responses")
+        for event_type, data in self.response_queue:
+            try:
+                await self.sio.emit(event_type, data)
+                logger.info(f"✅ Sent queued {event_type} response")
+            except Exception as e:
+                logger.error(f"❌ Failed to send queued {event_type} response: {e}")
+        
+        self.response_queue.clear()
+        logger.info("✅ Cleared response queue")
+
+    async def queue_response(self, event_type: str, data: dict):
+        """Queue a response to be sent when connection is restored."""
+        self.response_queue.append((event_type, data))
+        logger.info(f"📥 Queued {event_type} response (queue size: {len(self.response_queue)})")
             
     async def get_device_info(self):
         """Get device information from RealSense manager"""
@@ -270,7 +298,7 @@ class RobotWebSocketClient:
             
             # Create WebRTC offer using local WebRTC manager
             self.webrtc_manager = WebRTCManager(realsense_manager)
-            offer_response = await self.webrtc_manager.create_offer(device_id, stream_types)
+            offer_response = await self.webrtc_manager.create_offer(device_id, stream_types, session_id)
             
             if offer_response:
                 api_session_id, offer_dict = offer_response
@@ -442,6 +470,152 @@ class RobotWebSocketClient:
             del self.sessions[session_id]
         else:
             logger.warning(f"⚠️ Session {session_id} not found for cleanup")
+
+    async def handle_get_pointcloud_data_direct(self, data: Dict[str, Any]):
+        """Direct handler for get-pointcloud-data event."""
+        logger.info(f"🎯 Direct get-pointcloud-data handler called with data: {data}")
+        await self.handle_get_pointcloud_data(data)
+
+    async def handle_get_pointcloud_data(self, data: Dict[str, Any]):
+        """Handle point cloud data request."""
+        try:
+            device_id = data.get('deviceId')
+            logger.info(f"📡 Requesting point cloud data for device {device_id}")
+            
+            # Get point cloud data from RealSense manager
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f'http://localhost:8000/api/webrtc/pointcloud-data/{device_id}') as response:
+                    if response.status == 200:
+                        pointcloud_data = await response.json()
+                        logger.info(f"✅ Retrieved point cloud data for device {device_id}")
+                        # Send back to cloud server
+                        if self.sio.connected:
+                            await self.sio.emit('pointcloud-data', pointcloud_data)
+                        else:
+                            logger.warning("⚠️ Socket.IO not connected, queuing point cloud data")
+                            await self.queue_response('pointcloud-data', pointcloud_data)
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to get point cloud data: {error_text}")
+                        if self.sio.connected:
+                            await self.sio.emit('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
+                        else:
+                            logger.warning("⚠️ Socket.IO not connected, queuing error")
+                            await self.queue_response('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
+                        
+        except Exception as e:
+            logger.error(f"❌ Error getting point cloud data: {e}")
+            if self.sio.connected:
+                await self.sio.emit('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
+            else:
+                logger.warning("⚠️ Socket.IO not connected, queuing error")
+                await self.queue_response('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
+
+    async def handle_activate_pointcloud_direct(self, data: Dict[str, Any]):
+        """Direct handler for activate-pointcloud event."""
+        logger.info(f"🎯 Direct activate-pointcloud handler called with data: {data}")
+        await self.handle_activate_pointcloud(data)
+
+    async def handle_activate_pointcloud(self, data: Dict[str, Any]):
+        """Handle point cloud activation request."""
+        try:
+            device_id = data.get('deviceId')
+            enabled = data.get('enabled', True)
+            logger.info(f"📡 {'Activating' if enabled else 'Deactivating'} point cloud for device {device_id}")
+            
+            # Activate/deactivate point cloud via RealSense manager
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f'http://localhost:8000/api/devices/{device_id}/point_cloud/activate', 
+                                      json={'enabled': enabled}) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"✅ {'Activated' if enabled else 'Deactivated'} point cloud for device {device_id}")
+                        # Send back to cloud server
+                        if self.sio.connected:
+                            await self.sio.emit('pointcloud-activated', result)
+                        else:
+                            logger.warning("⚠️ Socket.IO not connected, queuing activation confirmation")
+                            await self.queue_response('pointcloud-activated', result)
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to activate point cloud: {error_text}")
+                        if self.sio.connected:
+                            await self.sio.emit('pointcloud-error', {'error': f'Failed to activate point cloud: {error_text}'})
+                        else:
+                            logger.warning("⚠️ Socket.IO not connected, queuing error")
+                            await self.queue_response('pointcloud-error', {'error': f'Failed to activate point cloud: {error_text}'})
+                        
+        except Exception as e:
+            logger.error(f"❌ Error activating point cloud: {e}")
+            if self.sio.connected:
+                await self.sio.emit('pointcloud-error', {'error': f'Error activating point cloud: {str(e)}'})
+            else:
+                logger.warning("⚠️ Socket.IO not connected, queuing error")
+                await self.queue_response('pointcloud-error', {'error': f'Error activating point cloud: {str(e)}'})
+
+    async def handle_start_device_stream_direct(self, data: Dict[str, Any]):
+        """Direct handler for start-device-stream event."""
+        logger.info(f"🎯 Direct start-device-stream handler called with data: {data}")
+        await self.handle_start_device_stream(data)
+
+    async def handle_start_device_stream(self, data: Dict[str, Any]):
+        """Handle device stream start request."""
+        try:
+            device_id = data.get('deviceId')
+            stream_configs = data.get('streamConfigs', [])
+            logger.info(f"🚀 Starting device stream for {device_id} with configs: {stream_configs}")
+            
+            # Call local API to start device stream
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"http://localhost:8000/api/devices/{device_id}/streams/start",
+                    json={"stream_configs": stream_configs}
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"✅ Device stream started: {result}")
+                        # Forward success response back to client
+                        await self.sio.emit('device-stream-started', {"deviceId": device_id, "result": result})
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to start device stream: {error_text}")
+                        await self.sio.emit('pointcloud-error', {"error": f"Failed to start device stream: {error_text}"})
+        except Exception as e:
+            logger.error(f"❌ Error starting device stream: {str(e)}")
+            await self.sio.emit('pointcloud-error', {"error": f"Error starting device stream: {str(e)}"})
+
+    async def handle_stop_device_stream_direct(self, data: Dict[str, Any]):
+        """Direct handler for stop-device-stream event."""
+        logger.info(f"🎯 Direct stop-device-stream handler called with data: {data}")
+        await self.handle_stop_device_stream(data)
+
+    async def handle_stop_device_stream(self, data: Dict[str, Any]):
+        """Handle device stream stop request."""
+        try:
+            device_id = data.get('deviceId')
+            logger.info(f"⏹️ Stopping device stream for {device_id}")
+            
+            # Call local API to stop device stream
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"http://localhost:8000/api/devices/{device_id}/streams/stop"
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"✅ Device stream stopped: {result}")
+                        # Forward success response back to client
+                        await self.sio.emit('device-stream-stopped', {"deviceId": device_id, "result": result})
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to stop device stream: {error_text}")
+                        await self.sio.emit('pointcloud-error', {"error": f"Failed to stop device stream: {error_text}"})
+        except Exception as e:
+            logger.error(f"❌ Error stopping device stream: {str(e)}")
+            await self.sio.emit('pointcloud-error', {"error": f"Error stopping device stream: {str(e)}"})
 
 # Global robot client instance
 robot_client = None

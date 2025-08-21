@@ -2,10 +2,10 @@
   "name": "realsense-signaling-server",
   "version": "1.0.0",
   "description": "WebRTC signaling server for RealSense camera streaming",
-  "main": "signaling-server.js",
+  "main": "cloud-signaling-server.js",
   "scripts": {
-    "start": "node signaling-server.js",
-    "dev": "nodemon signaling-server.js",
+    "start": "node cloud-signaling-server.js",
+    "dev": "nodemon cloud-signaling-server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
