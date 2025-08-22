@@ -13,6 +13,53 @@ import socketio
 
 from app.services.metadata_socket_server import MetadataSocketServer
 
+def safe_convert_vertices(vertices):
+    """Safely convert vertices to a Python list, handling NumPy arrays and other types."""
+    if vertices is None:
+        return []
+    
+    # If it's already a list, return it
+    if isinstance(vertices, list):
+        return vertices
+    
+    # If it's a NumPy array, convert to list
+    if hasattr(vertices, 'tolist'):
+        try:
+            return vertices.tolist()
+        except Exception as e:
+            print(f"❌ Error converting NumPy array to list: {e}")
+            return []
+    
+    # If it's a string, it's corrupted data
+    if isinstance(vertices, str):
+        print(f"❌ Vertices is a string (corrupted data), returning empty list")
+        return []
+    
+    # Try to convert to list
+    try:
+        return list(vertices)
+    except Exception as e:
+        print(f"❌ Cannot convert vertices to list: {type(vertices)}, error: {e}")
+        return []
+
+def safe_len(vertices):
+    """Safely get the length of vertices, handling NumPy arrays."""
+    if vertices is None:
+        return 0
+    
+    # Convert to list first if it's a NumPy array
+    if hasattr(vertices, 'tolist'):
+        try:
+            vertices = vertices.tolist()
+        except Exception:
+            return 0
+    
+    # Now it should be a list or similar
+    try:
+        return len(vertices)
+    except Exception:
+        return 0
+
 
 class RealSenseManager:
     def __init__(self, sio: socketio.AsyncServer):
@@ -509,11 +556,11 @@ class RealSenseManager:
             if device_id in self.device_infos:
                 self.device_infos[device_id].is_streaming = True
 
-            threading.Thread(
-                target=self.metadata_socket_server.start_broadcast,
-                args=(device_id,),
-                daemon=True,
-            ).start()
+            # threading.Thread(
+            #     target=self.metadata_socket_server.start_broadcast,
+            #     args=(device_id,),
+            #     daemon=True,
+            # ).start()
 
             return StreamStatus(
                 device_id=device_id,
@@ -535,7 +582,7 @@ class RealSenseManager:
                 )
 
             try:
-                self.metadata_socket_server.stop_broadcast()
+                # self.metadata_socket_server.stop_broadcast()
                 self.pipelines[device_id].stop()
 
                 # Clean up resources
@@ -675,7 +722,22 @@ class RealSenseManager:
                 )
 
             # Return the most recent metadata dictionary (last element)
-            return queue[-1]
+            latest_metadata = queue[-1]
+            
+            # Temporarily disable debug logging for point cloud data to avoid NumPy array errors
+            # TODO: Re-enable once NumPy array issues are resolved
+            # Debug logging for point cloud data
+            # if stream_key == "depth" and latest_metadata.get("point_cloud") and latest_metadata["point_cloud"].get("vertices"):
+            #     vertices = latest_metadata["point_cloud"]["vertices"]
+            #     print(f"🔍 RS_MANAGER: Retrieved vertices type: {type(vertices)}")
+            #     if hasattr(vertices, 'shape'):
+            #         print(f"🔍 RS_MANAGER: Retrieved vertices shape: {vertices.shape}")
+            #     elif isinstance(vertices, str):
+            #         print(f"🔍 RS_MANAGER: Retrieved vertices is string! Sample: {vertices[:100]}...")
+            #     elif safe_len(vertices) > 0:
+            #         print(f"🔍 RS_MANAGER: Retrieved first vertex: {vertices[0]}, type: {type(vertices[0])}")
+            
+            return latest_metadata
 
     def _collect_frames(self, device_id: str, align_processor=None):
         """Thread function to collect frames from the pipeline"""
@@ -794,10 +856,23 @@ class RealSenseManager:
                                     verts = (
                                         np.asanyarray(v).view(np.float32).reshape(-1, 3)
                                     )  # xyz
-                                    verts = verts[
-                                        verts[:, 2] >= 0.03
-                                    ]  # Filter out values where z < 0.03
+                                    
+                                    # Safely filter out values where z < 0.03
+                                    try:
+                                        if safe_len(verts) > 0:
+                                            mask = verts[:, 2] >= 0.03
+                                            verts = verts[mask]
+                                    except Exception as filter_error:
+                                        print(f"❌ Error filtering vertices: {filter_error}")
+                                        # Keep original vertices if filtering fails
+                                        pass
                                     # texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
+                                    
+                                    # Debug logging to see what we're storing
+                                    print(f"🔍 RS_MANAGER: Storing vertices type: {type(verts)}, shape: {verts.shape if hasattr(verts, 'shape') else 'no shape'}")
+                                    if safe_len(verts) > 0:
+                                        print(f"🔍 RS_MANAGER: First vertex: {verts[0]}, type: {type(verts[0])}")
+                                    
                                     metadata["point_cloud"] = {
                                         "vertices": verts,
                                         "texture_coordinates": [],

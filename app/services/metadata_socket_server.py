@@ -82,9 +82,11 @@ class MetadataSocketServer:
                             and "point_cloud" in metadata
                             and "vertices" in metadata["point_cloud"]
                         ):
-                            metadata["point_cloud"]["vertices"] = base64.b64encode(
-                                metadata["point_cloud"]["vertices"].tobytes()
-                            ).decode("utf-8")
+                            # Skip base64 encoding for point cloud data since we're using WebRTC data channels
+                            # metadata["point_cloud"]["vertices"] = base64.b64encode(
+                            #     metadata["point_cloud"]["vertices"].tobytes()
+                            # ).decode("utf-8")
+                            pass
                         all_metadata[stream_type] = metadata
                     except Exception as e:
                         if hasattr(e, "status_code"):

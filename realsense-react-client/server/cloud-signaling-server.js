@@ -83,12 +83,12 @@ class CloudSignalingServer {
       });
 
       // Handle point cloud data responses (from robot to client)
-      socket.on('pointcloud-data', (data) => {
-        console.log(`📡 Received pointcloud-data response from robot:`, data);
-        // Forward to all clients (since we don't track which client requested it)
-        this.broadcastToClients('pointcloud-data', data);
-        console.log(`✅ pointcloud-data forwarded to clients`);
-      });
+      // socket.on('pointcloud-data', (data) => {
+      //     console.log(`📡 Received pointcloud-data response from robot:`, data);
+      //     // Forward to all clients (since we don't track which client requested it)
+      //     this.broadcastToClients('pointcloud-data', data);
+      //     console.log(`✅ pointcloud-data forwarded to clients`);
+      // });
 
       // Handle point cloud error responses (from robot to client)
       socket.on('pointcloud-error', (data) => {
@@ -194,25 +194,30 @@ class CloudSignalingServer {
       });
 
       // Handle point cloud data requests (from client to robot)
-      socket.on('get-pointcloud-data', (data) => {
-        console.log(`📡 Received get-pointcloud-data event:`, data);
-        const { deviceId } = data;
-        
-        // Find robot for this device
-        const robotId = `robot-${deviceId}`;
-        const robotSocket = this.robots.get(robotId);
-        
-        if (!robotSocket) {
-          socket.emit('pointcloud-error', { error: 'Robot not found for device' });
-          return;
-        }
-      
-        console.log(`🔄 Requesting point cloud data for device ${deviceId} from robot ${robotId}`);
-        
-        // Forward to robot
-        robotSocket.emit('get-pointcloud-data', { deviceId });
-        console.log(`✅ get-pointcloud-data forwarded to robot`);
-      });
+      // socket.on('get-pointcloud-data', (data) => {
+      //     console.log(`📡 Received get-pointcloud-data event:`, data);
+      //     const { deviceId } = data;
+      //     
+      //     // Find the robot that has this device
+      //     const robotId = this.findRobotWithDevice(deviceId);
+      //     if (!robotId) {
+      //         console.log(`❌ No robot found with device ${deviceId}`);
+      //         socket.emit('pointcloud-error', { error: `No robot found with device ${deviceId}` });
+      //         return;
+      //     }
+      //     
+      //     console.log(`🔄 Getting point cloud data for device ${deviceId} via robot ${robotId}`);
+      //     
+      //     // Forward to the robot
+      //     const robotSocket = this.robots.get(robotId);
+      //     if (robotSocket) {
+      //         robotSocket.emit('get-pointcloud-data', { deviceId });
+      //         console.log(`✅ get-pointcloud-data forwarded to robot`);
+      //     } else {
+      //         console.log(`❌ Robot ${robotId} not found`);
+      //         socket.emit('pointcloud-error', { error: `Robot ${robotId} not available` });
+      //     }
+      // });
 
       // Handle point cloud activation (from client to robot)
       socket.on('activate-pointcloud', (data) => {

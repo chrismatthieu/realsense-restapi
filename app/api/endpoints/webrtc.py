@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 
 
 from app.models.webrtc import WebRTCOffer, WebRTCAnswer, WebRTCStatus, ICECandidate
-from app.services.webrtc_manager import WebRTCManager
+from app.services.webrtc_manager import WebRTCManager, safe_len
 from app.api.dependencies import get_webrtc_manager
 
 router = APIRouter()
@@ -206,17 +206,31 @@ async def get_pointcloud_data(
             # Get depth frame metadata which contains point cloud data
             metadata = realsense_manager.get_latest_metadata(device_id, "depth")
             
-            if "point_cloud" in metadata and metadata["point_cloud"]["vertices"] is not None:
+            vertices_data = metadata.get("point_cloud", {}).get("vertices")
+            if "point_cloud" in metadata and vertices_data is not None:
                 vertices = metadata["point_cloud"]["vertices"]
                 
-                # Convert numpy array to list for JSON serialization
-                vertices_list = vertices.tolist() if hasattr(vertices, 'tolist') else vertices
+                # Convert numpy array to list for JSON serialization safely
+                if hasattr(vertices, 'tolist'):
+                    try:
+                        vertices_list = vertices.tolist()
+                    except Exception as e:
+                        print(f"❌ Error converting NumPy array to list in webrtc.py: {e}")
+                        vertices_list = []
+                elif isinstance(vertices, list):
+                    vertices_list = vertices
+                else:
+                    try:
+                        vertices_list = list(vertices)
+                    except Exception as e:
+                        print(f"❌ Error converting vertices to list in webrtc.py: {e}")
+                        vertices_list = []
                 
                 return {
                     "success": True,
                     "device_id": device_id,
                     "vertices": vertices_list,
-                    "vertex_count": len(vertices_list),
+                    "vertex_count": safe_len(vertices_list),
                     "timestamp": metadata.get("timestamp", 0),
                     "frame_number": metadata.get("frame_number", 0)
                 }

@@ -332,6 +332,12 @@ const PointCloudDemo = () => {
               const data = JSON.parse(event.data);
               logMessage(`📡 Raw data received: ${JSON.stringify(data).substring(0, 200)}...`);
               
+              // Handle heartbeat messages to keep connection alive
+              if (data.type === 'heartbeat') {
+                logMessage(`💓 Received heartbeat for session ${data.session_id}`);
+                return;
+              }
+              
               if (data.type === 'pointcloud-data' && data.vertices) {
                 // Check if this is a chunked message
                 if (data.chunk_info) {
@@ -341,16 +347,11 @@ const PointCloudDemo = () => {
                   // Handle single message (small data)
                   logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
                   logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
-                  
-                  // Update the point cloud with the received data
                   updatePointCloudWithData(data.vertices);
-                  
-                  // Update status to active
-                  setPointCloudStatus('Active');
                 }
               }
             } catch (error) {
-              logMessage(`❌ Error parsing point cloud data: ${error.message}`);
+              logMessage(`❌ Error parsing data channel message: ${error.message}`);
             }
           };
 

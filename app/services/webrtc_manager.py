@@ -13,6 +13,53 @@ from app.core.errors import RealSenseError
 from app.core.config import get_settings
 from app.models.webrtc import WebRTCSession, WebRTCStatus
 
+def safe_convert_vertices(vertices):
+    """Safely convert vertices to a Python list, handling NumPy arrays and other types."""
+    if vertices is None:
+        return []
+    
+    # If it's already a list, return it
+    if isinstance(vertices, list):
+        return vertices
+    
+    # If it's a NumPy array, convert to list
+    if hasattr(vertices, 'tolist'):
+        try:
+            return vertices.tolist()
+        except Exception as e:
+            print(f"❌ Error converting NumPy array to list: {e}")
+            return []
+    
+    # If it's a string, it's corrupted data
+    if isinstance(vertices, str):
+        print(f"❌ Vertices is a string (corrupted data), returning empty list")
+        return []
+    
+    # Try to convert to list
+    try:
+        return list(vertices)
+    except Exception as e:
+        print(f"❌ Cannot convert vertices to list: {type(vertices)}, error: {e}")
+        return []
+
+def safe_len(vertices):
+    """Safely get the length of vertices, handling NumPy arrays."""
+    if vertices is None:
+        return 0
+    
+    # Convert to list first if it's a NumPy array
+    if hasattr(vertices, 'tolist'):
+        try:
+            vertices = vertices.tolist()
+        except Exception:
+            return 0
+    
+    # Now it should be a list or similar
+    try:
+        return len(vertices)
+    except Exception:
+        return 0
+
 class RealSenseVideoTrack(VideoStreamTrack):
     """Video track that captures frames from RealSense camera."""
 
@@ -87,20 +134,31 @@ class PointCloudVideoTrack(VideoStreamTrack):
             # Get frame from RealSense (this will be depth frame)
             frame_data = self.realsense_manager.get_latest_frame(self.device_id, "depth")
             
+            # Temporarily disable metadata retrieval to avoid NumPy array errors
+            # TODO: Re-enable once NumPy array issues are resolved
             # Get metadata separately to check for point cloud data
-            try:
-                metadata = self.realsense_manager.get_latest_metadata(self.device_id, "depth")
-                # Check if point cloud data is available
-                if "point_cloud" in metadata and metadata["point_cloud"]["vertices"] is not None:
-                    # Create a visualization frame with point cloud data encoded
-                    img = self._create_point_cloud_visualization(metadata["point_cloud"]["vertices"])
-                else:
-                    # Fallback to depth frame if no point cloud data
-                    img = frame_data
-            except Exception as e:
-                # If metadata is not available, use depth frame
-                print(f"Warning: Could not get metadata for point cloud: {str(e)}")
-                img = frame_data
+            # try:
+            #     metadata = self.realsense_manager.get_latest_metadata(self.device_id, "depth")
+            #     # Temporarily disable point cloud visualization to isolate NumPy array error
+            #     # TODO: Re-enable once NumPy array issues are resolved
+            #     # Check if point cloud data is available
+            #     # if "point_cloud" in metadata and metadata["point_cloud"].get("vertices") is not None:
+            #     #     vertices = metadata["point_cloud"]["vertices"]
+            #     #     # Use safe_len to avoid NumPy array boolean context issues
+            #     #     if safe_len(vertices) > 0:
+            #     #         # Create a visualization frame with point cloud data encoded
+            #     #         img = self._create_point_cloud_visualization(vertices)
+            #     #     else:
+            #     #         # Fallback to depth frame if no valid vertices
+            #     #         img = frame_data
+            #     # else:
+            #     #     # Fallback to depth frame if no point cloud data
+            #     img = frame_data
+            # except Exception as e:
+            #     # If metadata is not available, use depth frame
+            #     print(f"Warning: Could not get metadata for point cloud: {str(e)}")
+            #     img = frame_data
+            img = frame_data
             
             # Convert to RGB format if necessary
             if len(img.shape) == 3 and img.shape[2] == 3:
@@ -137,7 +195,10 @@ class PointCloudVideoTrack(VideoStreamTrack):
 
     def _create_point_cloud_visualization(self, vertices):
         """Create a visualization frame that encodes point cloud data for 3D rendering."""
-        if vertices is None or len(vertices) == 0:
+        # Safely convert vertices to list
+        vertices = safe_convert_vertices(vertices)
+        
+        if safe_len(vertices) == 0:
             # Return black image if no vertices
             return np.zeros((480, 640, 3), dtype=np.uint8)
         
@@ -147,7 +208,7 @@ class PointCloudVideoTrack(VideoStreamTrack):
         
         # Add text overlay with point cloud information
         text_lines = [
-            f"Point Cloud: {len(vertices)} vertices",
+            f"Point Cloud: {safe_len(vertices)} vertices",
             "3D Interactive View Available",
             "Use mouse to rotate/zoom",
             "Loading 3D data..."
@@ -294,7 +355,7 @@ class WebRTCManager:
                         self.realsense_manager.start_stream(device_id, stream_configs)
                         
                         # Enable point cloud processing if pointcloud stream is requested
-                        if any(config["stream_type"] == "pointcloud" for config in existing_configs):
+                        if any(stream_type == "pointcloud" for stream_type in stream_types):
                             self.realsense_manager.activate_point_cloud(device_id, True)
                         
                         # Update stored configuration
@@ -337,7 +398,7 @@ class WebRTCManager:
                         self.realsense_manager.start_stream(device_id, stream_configs)
                         
                         # Enable point cloud processing if pointcloud stream is requested
-                        if any(config["stream_type"] == "pointcloud" for config in new_stream_configs):
+                        if any(stream_type == "pointcloud" for stream_type in stream_types):
                             self.realsense_manager.activate_point_cloud(device_id, True)
                         
                         # Store configuration after successful start
@@ -440,7 +501,7 @@ class WebRTCManager:
                             self.realsense_manager.start_stream(device_id, stream_configs)
                             
                             # Disable point cloud processing if no pointcloud streams remain
-                            if not any(config["stream_type"] == "pointcloud" for config in updated_configs):
+                            if not any(stream_type == "pointcloud" for stream_type in self.stream_references.get(device_id, {})):
                                 self.realsense_manager.activate_point_cloud(device_id, False)
                             
                             # Update stored configuration
@@ -608,7 +669,7 @@ class WebRTCManager:
                 def on_open():
                     print(f"📡 Data channel opened for session {session_id}")
                     # Start sending point cloud data
-                    asyncio.create_task(self._send_point_cloud_data(session_id, data_channel))
+                    asyncio.create_task(self._send_point_cloud_data(session_id, device_id))
                 
                 @data_channel.on("close")
                 def on_close():
@@ -987,141 +1048,195 @@ class WebRTCManager:
         await asyncio.sleep(60)  # Run cleanup every minute
         asyncio.create_task(self._cleanup_sessions())
 
-    async def _send_point_cloud_data(self, session_id: str, data_channel):
-        """Send point cloud data through WebRTC data channel."""
+    async def _send_point_cloud_data(self, session_id: str, device_id: str):
+        """Send point cloud data over WebRTC data channel"""
+        import json
+        import time
+        
         try:
-            async with self.lock:
-                if session_id not in self.sessions:
-                    return
-                session = self.sessions[session_id]
-                device_id = session["device_id"]
-
             print(f"🚀 Starting point cloud data transmission for session {session_id}")
-
+            
+            # Get the data channel for this session
+            async with self.lock:
+                session_data = self.sessions.get(session_id)
+                if not session_data:
+                    print(f"❌ Session {session_id} not found")
+                    return
+                data_channel = session_data.get("data_channel")
+                if not data_channel:
+                    print(f"❌ No data channel found for session {session_id}")
+                    return
+            
+            # Add keep-alive mechanism
+            last_heartbeat = time.time()
+            heartbeat_interval = 30  # Send heartbeat every 30 seconds
+            
             while True:
                 try:
-                    # Check if session still exists and data channel is open
+                    # Check if session still exists
                     async with self.lock:
                         if session_id not in self.sessions:
+                            print(f"📡 Session {session_id} no longer exists, stopping transmission")
                             break
-                        session = self.sessions[session_id]
-                        if session.get("should_cleanup", False):
+                        session_data = self.sessions.get(session_id)
+                        if not session_data:
                             break
-
-                    # Get point cloud data from RealSense manager
-                    try:
-                        # Get depth frame metadata which contains point cloud data
-                        metadata = self.realsense_manager.get_latest_metadata(device_id, "depth")
-                        
-                        if "point_cloud" in metadata and metadata["point_cloud"]["vertices"] is not None:
-                            vertices = metadata["point_cloud"]["vertices"]
-                            
-                            # Convert numpy array to list for JSON serialization
-                            vertices_list = vertices.tolist() if hasattr(vertices, 'tolist') else vertices
-                            
-                            point_cloud_data = {
-                                "success": True,
-                                "device_id": device_id,
-                                "vertices": vertices_list,
-                                "vertex_count": len(vertices_list),
-                                "timestamp": metadata.get("timestamp", 0),
-                                "frame_number": metadata.get("frame_number", 0)
-                            }
-                        else:
-                            point_cloud_data = {
-                                "success": False,
-                                "error": "No point cloud data available",
-                                "device_id": device_id
-                            }
-                            
-                    except Exception as e:
-                        point_cloud_data = {
-                            "success": False,
-                            "error": f"Failed to get point cloud data: {str(e)}",
-                            "device_id": device_id
-                        }
+                        data_channel = session_data.get("data_channel")
+                        if not data_channel:
+                            break
                     
-                    if point_cloud_data and point_cloud_data.get("vertices"):
-                        # Check if data channel is still open
+                    # Send heartbeat to keep connection alive
+                    current_time = time.time()
+                    if current_time - last_heartbeat > heartbeat_interval:
                         if data_channel.readyState == "open":
-                            # Send point cloud data through data channel
-                            import json
-                            
-                            # Limit the number of vertices to prevent message size issues
-                            vertices = point_cloud_data["vertices"]
-                            max_vertices = 10000  # Limit to 10K vertices per message
-                            
-                            if len(vertices) > max_vertices:
-                                vertices = vertices[:max_vertices]
-                                print(f"📡 Limiting point cloud data to {max_vertices} vertices (original: {len(point_cloud_data['vertices'])})")
-                            
-                            data_message = {
-                                "type": "pointcloud-data",
-                                "device_id": device_id,
-                                "vertices": vertices,
-                                "timestamp": time.time(),
-                                "total_vertices": len(point_cloud_data["vertices"]),
-                                "sent_vertices": len(vertices)
-                            }
-                            
-                            # Send as JSON string with smart chunking for large messages
                             try:
-                                max_vertices_per_chunk = 5000  # Send 5K vertices per chunk
-                                
-                                if len(vertices) <= max_vertices_per_chunk:
-                                    # Send as single message if small enough
-                                    json_data = json.dumps(data_message)
-                                    data_channel.send(json_data)
-                                    print(f"📡 Sent point cloud data: {len(vertices)} vertices (JSON size: {len(json_data)} bytes)")
-                                else:
-                                    # Split vertices into multiple chunks
-                                    import uuid
-                                    message_id = str(uuid.uuid4())
-                                    total_chunks = (len(vertices) + max_vertices_per_chunk - 1) // max_vertices_per_chunk
-                                    
-                                    print(f"📡 Sending large point cloud data in {total_chunks} chunks: {len(vertices)} vertices")
-                                    
-                                    for chunk_index in range(total_chunks):
-                                        start_vertex = chunk_index * max_vertices_per_chunk
-                                        end_vertex = min(start_vertex + max_vertices_per_chunk, len(vertices))
-                                        chunk_vertices = vertices[start_vertex:end_vertex]
-                                        
-                                        # Create chunk message with complete JSON structure
-                                        chunk_message = {
-                                            "type": "pointcloud-data",
-                                            "device_id": device_id,
-                                            "vertices": chunk_vertices,
-                                            "timestamp": time.time(),
-                                            "total_vertices": len(vertices),
-                                            "sent_vertices": len(chunk_vertices),
-                                            "message_id": message_id,
-                                            "chunk_index": chunk_index,
-                                            "total_chunks": total_chunks,
-                                            "is_last_chunk": chunk_index == total_chunks - 1,
-                                            "chunk_info": True  # Flag to indicate this is a chunk
-                                        }
-                                        
-                                        chunk_json = json.dumps(chunk_message)
-                                        data_channel.send(chunk_json)
-                                        print(f"📡 Sent chunk {chunk_index + 1}/{total_chunks} with {len(chunk_vertices)} vertices (JSON size: {len(chunk_json)} bytes)")
-                                        
-                                        # Small delay between chunks to prevent overwhelming the channel
-                                        await asyncio.sleep(0.001)
-                                    
-                                    print(f"📡 Completed sending {total_chunks} chunks for message {message_id}")
-                                    
-                            except Exception as json_error:
-                                print(f"❌ JSON serialization error: {json_error}")
-                                # Try with fewer vertices
-                                vertices = vertices[:1000]  # Reduce to 1K vertices
-                                data_message["vertices"] = vertices
-                                data_message["sent_vertices"] = len(vertices)
+                                heartbeat_message = {
+                                    "type": "heartbeat",
+                                    "timestamp": current_time,
+                                    "session_id": session_id
+                                }
+                                data_channel.send(json.dumps(heartbeat_message))
+                                print(f"💓 Sent heartbeat for session {session_id}")
+                                last_heartbeat = current_time
+                            except Exception as heartbeat_error:
+                                print(f"❌ Heartbeat error: {heartbeat_error}")
+                                break
+                    
+                    # Get latest point cloud data
+                    point_cloud_data = self.realsense_manager.get_latest_metadata(device_id, "depth")
+                    
+                    # Temporarily disable debug logging to avoid NumPy array boolean context issues
+                    # TODO: Re-enable once NumPy array issues are resolved
+                    # Debug logging
+                    # if point_cloud_data is None:
+                    #     print(f"📡 No point cloud data available for device {device_id}")
+                    # elif not point_cloud_data.get("point_cloud"):
+                    #     print(f"📡 Point cloud data has no point_cloud key: {point_cloud_data.keys()}")
+                    # elif not point_cloud_data["point_cloud"].get("vertices"):
+                    #     print(f"📡 Point cloud data has no vertices: {point_cloud_data['point_cloud'].keys()}")
+                    # else:
+                    #     vertices_count = safe_len(point_cloud_data['point_cloud']['vertices'])
+                    #     print(f"📡 Got point cloud data with {vertices_count} vertices")
+                    
+                    # Re-enable point cloud data sending with proper NumPy array handling
+                    # Break down the complex boolean expression to avoid NumPy array boolean context issues
+                    if point_cloud_data is None:
+                        continue
+                    
+                    point_cloud = point_cloud_data.get("point_cloud")
+                    if point_cloud is None:
+                        continue
+                    
+                    vertices_data = point_cloud.get("vertices")
+                    if vertices_data is None:
+                        continue
+                    
+                    vertices_count = safe_len(vertices_data)
+                    if vertices_count <= 0:
+                        continue
+                    
+                    # Check if data channel is still open
+                    if data_channel.readyState == "open":
+                        # Send point cloud data through data channel
+                        
+                        # Get vertices and safely convert to list
+                        vertices = safe_convert_vertices(vertices_data)
+                            
+                        if safe_len(vertices) == 0:
+                            print(f"📡 No valid vertices data, skipping")
+                            continue
+                        
+                        # Debug logging to see what we're getting
+                        print(f"🔍 DEBUG: vertices type: {type(vertices)}")
+                        if safe_len(vertices) > 0:
+                            print(f"🔍 DEBUG: first vertex: {vertices[0]}, type: {type(vertices[0])}")
+                        
+                        # Validate first vertex to ensure proper format
+                        if safe_len(vertices) > 0:
+                            first_vertex = vertices[0]
+                            # Convert first_vertex to list if it's a NumPy array
+                            if hasattr(first_vertex, 'tolist'):
+                                first_vertex = first_vertex.tolist()
+                            if not isinstance(first_vertex, (list, tuple)) or len(first_vertex) != 3:
+                                print(f"❌ Invalid vertex format: {first_vertex}")
+                                continue
+                        
+                        max_vertices = 10000  # Limit to 10K vertices per message
+                        
+                        if safe_len(vertices) > max_vertices:
+                            original_count = safe_len(vertices)
+                            vertices = vertices[:max_vertices]
+                            print(f"📡 Limiting point cloud data to {max_vertices} vertices (original: {original_count})")
+                        
+                        data_message = {
+                            "type": "pointcloud-data",
+                            "device_id": device_id,
+                            "vertices": vertices,  # Direct array, not nested object
+                            "timestamp": time.time(),
+                            "total_vertices": safe_len(vertices),
+                            "sent_vertices": safe_len(vertices)
+                        }
+                        
+                        # Send as JSON string with smart chunking for large messages
+                        try:
+                            max_vertices_per_chunk = 5000  # Send 5K vertices per chunk
+                            
+                            if safe_len(vertices) <= max_vertices_per_chunk:
+                                # Send as single message if small enough
                                 json_data = json.dumps(data_message)
                                 data_channel.send(json_data)
-                                print(f"📡 Sent reduced point cloud data: {len(vertices)} vertices")
-                        else:
-                            print(f"📡 Data channel is not open (state: {data_channel.readyState}), stopping transmission")
-                            break
+                                print(f"📡 Sent point cloud data: {safe_len(vertices)} vertices (JSON size: {len(json_data)} bytes)")
+                            else:
+                                # Split vertices into multiple chunks
+                                import uuid
+                                message_id = str(uuid.uuid4())
+                                total_chunks = (safe_len(vertices) + max_vertices_per_chunk - 1) // max_vertices_per_chunk
+                                
+                                print(f"📡 Sending large point cloud data in {total_chunks} chunks: {safe_len(vertices)} vertices")
+                                
+                                for chunk_index in range(total_chunks):
+                                    start_vertex = chunk_index * max_vertices_per_chunk
+                                    end_vertex = min(start_vertex + max_vertices_per_chunk, safe_len(vertices))
+                                    chunk_vertices = vertices[start_vertex:end_vertex]
+                                    
+                                    # Create chunk message with complete JSON structure
+                                    chunk_message = {
+                                        "type": "pointcloud-data",
+                                        "device_id": device_id,
+                                        "vertices": chunk_vertices,
+                                        "timestamp": time.time(),
+                                        "total_vertices": safe_len(vertices),
+                                        "sent_vertices": safe_len(chunk_vertices),
+                                        "message_id": message_id,
+                                        "chunk_index": chunk_index,
+                                        "total_chunks": total_chunks,
+                                        "is_last_chunk": chunk_index == total_chunks - 1,
+                                        "chunk_info": True  # Flag to indicate this is a chunk
+                                    }
+                                    
+                                    chunk_json = json.dumps(chunk_message)
+                                    data_channel.send(chunk_json)
+                                    print(f"📡 Sent chunk {chunk_index + 1}/{total_chunks} with {safe_len(chunk_vertices)} vertices (JSON size: {len(chunk_json)} bytes)")
+                                    
+                                    # Small delay between chunks to prevent overwhelming the channel
+                                    await asyncio.sleep(0.001)
+                                
+                                print(f"📡 Completed sending {total_chunks} chunks for message {message_id}")
+                                
+                        except Exception as json_error:
+                            print(f"❌ JSON serialization error: {json_error}")
+                            # Try with fewer vertices - ensure it's a list first
+                            if hasattr(vertices, 'tolist'):
+                                vertices = vertices.tolist()
+                            vertices = vertices[:1000]  # Reduce to 1K vertices
+                            data_message["vertices"] = vertices
+                            data_message["sent_vertices"] = safe_len(vertices)
+                            json_data = json.dumps(data_message)
+                            data_channel.send(json_data)
+                            print(f"📡 Sent reduced point cloud data: {safe_len(vertices)} vertices")
+                    else:
+                        print(f"📡 Data channel is not open (state: {data_channel.readyState}), stopping transmission")
+                        break
                     
                     # Wait before sending next update
                     await asyncio.sleep(0.1)  # 10 FPS

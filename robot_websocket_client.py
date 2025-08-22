@@ -77,7 +77,8 @@ class RobotWebSocketClient:
         self.sio.on('switch-stream-type', self.handle_switch_stream_type_direct)
         self.sio.on('webrtc-answer', self.handle_webrtc_answer_direct)
         self.sio.on('ice-candidate', self.handle_ice_candidate_direct)
-        self.sio.on('get-pointcloud-data', self.handle_get_pointcloud_data_direct)
+        # Point cloud data is now handled via WebRTC data channels, not Socket.IO
+        # self.sio.on('get-pointcloud-data', self.handle_get_pointcloud_data_direct)
         self.sio.on('activate-pointcloud', self.handle_activate_pointcloud_direct)
         self.sio.on('start-device-stream', self.handle_start_device_stream_direct)
         self.sio.on('stop-device-stream', self.handle_stop_device_stream_direct)
@@ -145,15 +146,31 @@ class RobotWebSocketClient:
             await self.sio.emit('pong', {'response': 'pong'})
             
     async def handle_reconnect(self):
-        """Handle reconnection logic"""
-        if self.reconnect_attempts < self.max_reconnect_attempts:
+        """Handle reconnection with exponential backoff"""
+        while self.reconnect_attempts < self.max_reconnect_attempts:
             self.reconnect_attempts += 1
-            delay = self.reconnect_delay * self.reconnect_attempts
+            delay = self.reconnect_delay * (2 ** (self.reconnect_attempts - 1))  # Exponential backoff
             logger.info(f"🔄 Reconnecting in {delay} seconds (attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})")
+            
             await asyncio.sleep(delay)
-            await self.connect()
-        else:
-            logger.error("❌ Max reconnection attempts reached. Stopping robot client.")
+            
+            try:
+                await self.sio.connect(
+                    self.cloud_url,
+                    wait_timeout=10,
+                    transports=['websocket', 'polling']
+                )
+                self.connected = True
+                self.reconnect_attempts = 0
+                logger.info("✅ Successfully reconnected to cloud signaling server")
+                return
+            except Exception as e:
+                logger.error(f"❌ Reconnection attempt {self.reconnect_attempts} failed: {e}")
+                self.connected = False
+        
+        logger.error(f"❌ Failed to reconnect after {self.max_reconnect_attempts} attempts")
+        # Reset for next connection attempt
+        self.reconnect_attempts = 0
             
     async def register_robot(self):
         """Register this robot with the cloud server"""
@@ -489,28 +506,30 @@ class RobotWebSocketClient:
                     if response.status == 200:
                         pointcloud_data = await response.json()
                         logger.info(f"✅ Retrieved point cloud data for device {device_id}")
-                        # Send back to cloud server
-                        if self.sio.connected:
-                            await self.sio.emit('pointcloud-data', pointcloud_data)
-                        else:
-                            logger.warning("⚠️ Socket.IO not connected, queuing point cloud data")
-                            await self.queue_response('pointcloud-data', pointcloud_data)
+                        # Point cloud data is now sent via WebRTC data channels, not Socket.IO
+                        # if self.sio.connected:
+                        #     await self.sio.emit('pointcloud-data', pointcloud_data)
+                        # else:
+                        #     logger.warning("⚠️ Socket.IO not connected, queuing point cloud data")
+                        #     await self.queue_response('pointcloud-data', pointcloud_data)
                     else:
                         error_text = await response.text()
                         logger.error(f"❌ Failed to get point cloud data: {error_text}")
-                        if self.sio.connected:
-                            await self.sio.emit('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
-                        else:
-                            logger.warning("⚠️ Socket.IO not connected, queuing error")
-                            await self.queue_response('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
+                        # Point cloud errors are now handled via WebRTC data channels, not Socket.IO
+                        # if self.sio.connected:
+                        #     await self.sio.emit('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
+                        # else:
+                        #     logger.warning("⚠️ Socket.IO not connected, queuing error")
+                        #     await self.queue_response('pointcloud-error', {'error': f'Failed to get point cloud data: {error_text}'})
                         
         except Exception as e:
             logger.error(f"❌ Error getting point cloud data: {e}")
-            if self.sio.connected:
-                await self.sio.emit('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
-            else:
-                logger.warning("⚠️ Socket.IO not connected, queuing error")
-                await self.queue_response('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
+            # Point cloud errors are now handled via WebRTC data channels, not Socket.IO
+            # if self.sio.connected:
+            #     await self.sio.emit('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
+            # else:
+            #     logger.warning("⚠️ Socket.IO not connected, queuing error")
+            #     await self.queue_response('pointcloud-error', {'error': f'Error getting point cloud data: {str(e)}'})
 
     async def handle_activate_pointcloud_direct(self, data: Dict[str, Any]):
         """Direct handler for activate-pointcloud event."""

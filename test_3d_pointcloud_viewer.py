@@ -77,7 +77,7 @@ class PointCloud3DTest:
                 print(f"   📋 Frame number: {data['frame_number']}")
                 
                 # Show sample vertices
-                if data["vertices"] and len(data["vertices"]) > 0:
+                if data.get("vertices") is not None and len(data["vertices"]) > 0:
                     print(f"\n   📍 Sample vertices (first 3):")
                     for i, vertex in enumerate(data["vertices"][:3]):
                         print(f"      Vertex {i+1}: X={vertex[0]:.3f}, Y={vertex[1]:.3f}, Z={vertex[2]:.3f}")
