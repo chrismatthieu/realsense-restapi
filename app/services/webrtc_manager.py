@@ -1161,7 +1161,7 @@ class WebRTCManager:
                                 print(f"❌ Invalid vertex format: {first_vertex}")
                                 continue
                         
-                        max_vertices = 10000  # Limit to 10K vertices per message
+                        max_vertices = 3000  # Reduced to 3K vertices per message for faster updates
                         
                         if safe_len(vertices) > max_vertices:
                             original_count = safe_len(vertices)
@@ -1177,9 +1177,9 @@ class WebRTCManager:
                             "sent_vertices": safe_len(vertices)
                         }
                         
-                        # Send as JSON string with smart chunking for large messages
+                        # Send as JSON string with optimized chunking for faster updates
                         try:
-                            max_vertices_per_chunk = 5000  # Send 5K vertices per chunk
+                            max_vertices_per_chunk = 3000  # Send 3K vertices per chunk for faster transmission
                             
                             if safe_len(vertices) <= max_vertices_per_chunk:
                                 # Send as single message if small enough
@@ -1218,8 +1218,8 @@ class WebRTCManager:
                                     data_channel.send(chunk_json)
                                     print(f"📡 Sent chunk {chunk_index + 1}/{total_chunks} with {safe_len(chunk_vertices)} vertices (JSON size: {len(chunk_json)} bytes)")
                                     
-                                    # Small delay between chunks to prevent overwhelming the channel
-                                    await asyncio.sleep(0.001)
+                                    # Minimal delay between chunks for faster transmission
+                                    await asyncio.sleep(0.0001)
                                 
                                 print(f"📡 Completed sending {total_chunks} chunks for message {message_id}")
                                 
@@ -1238,8 +1238,8 @@ class WebRTCManager:
                         print(f"📡 Data channel is not open (state: {data_channel.readyState}), stopping transmission")
                         break
                     
-                    # Wait before sending next update
-                    await asyncio.sleep(0.1)  # 10 FPS
+                    # Wait before sending next update - increased to 30 FPS for smoother updates
+                    await asyncio.sleep(0.033)  # ~30 FPS
                     
                 except Exception as e:
                     print(f"❌ Error sending point cloud data: {str(e)}")
