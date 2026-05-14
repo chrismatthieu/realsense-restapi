@@ -1,5 +1,7 @@
 # RealSense WebRTC Demo - Multi-Client Support
 
+> **Current entrypoints:** the camera-side stack is packaged as **`teleopsh`** on PyPI (`pip install teleopsh`, `teleopsh` / `python -m teleop`) and has an optional npm launcher **`teleop`** (`npx teleop`). See the [main README](../README.md) and [`packages/teleop/README.md`](../packages/teleop/README.md). This file focuses on the original multi-client WebRTC demo narrative.
+
 ## 🎉 Success! The WebRTC demo now supports multiple concurrent browser connections
 
 This repository contains a complete, working implementation of a RealSense WebRTC streaming demo with **multi-client support**. The demo allows you to stream video from a RealSense camera to **multiple web browsers simultaneously** using WebRTC technology.

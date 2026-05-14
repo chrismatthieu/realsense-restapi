@@ -2,6 +2,10 @@
 
 A Node.js/Express signaling server that handles WebRTC signaling between the React client and Python RealSense API server.
 
+## Related: camera-side (Python)
+
+The machine with the RealSense camera runs the **FastAPI + WebRTC** stack. Install from PyPI as **`teleopsh`** or use the npm launcher **`teleop`** (`npx teleop`) — see the [repository root README](../../README.md) and [`../../packages/teleop/README.md`](../../packages/teleop/README.md). This Node server only bridges **browser ↔ robot**; it does not replace Python on the robot host.
+
 ## Features
 
 - **WebRTC Signaling**: Handles offer/answer exchange and ICE candidate negotiation

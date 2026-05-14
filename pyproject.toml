@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teleopsh"
+version = "0.1.0"
+description = "RealSense REST API + WebRTC robot stack (camera-side). PyPI: teleopsh. npm CLI wrapper: teleop."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.9.0",
+  "fastapi==0.115.12",
+  "uvicorn==0.34.0",
+  "pydantic==2.10.6",
+  "pyrealsense2==2.56.4.9191",
+  "aiortc>=1.14",
+  "av>=16.0.0",
+  "opencv-python==4.11.0.86",
+  "numpy==2.2.4",
+  "python-socketio==5.13.0",
+]
+
+[project.scripts]
+# PyPI distribution is `teleopsh` (npm package remains `teleop`).
+teleopsh = "teleop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "teleop*"]
+
+[tool.setuptools]
+py-modules = ["main", "config", "robot_websocket_client"]

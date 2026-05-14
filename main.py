@@ -1,5 +1,3 @@
-import uvicorn
-import asyncio
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,9 +9,6 @@ from app.core.errors import setup_exception_handlers
 from config import settings
 import socketio
 from app.services.socketio import sio
-
-# Import robot WebSocket client
-from robot_websocket_client import start_robot_websocket_client, stop_robot_websocket_client
 
 
 # --- Create FastAPI App ---
@@ -84,26 +79,6 @@ async def test_3d_viewer_debug():
 combined_app = socketio.ASGIApp(socketio_server=sio, other_asgi_app=app, socketio_path='socket')
 
 if __name__ == "__main__":
-    # Start the robot WebSocket client in the background
-    async def start_services():
-        # Start robot WebSocket client
-        robot_task = asyncio.create_task(start_robot_websocket_client())
-        
-        # Start FastAPI server
-        config = uvicorn.Config("main:combined_app", host="0.0.0.0", port=8000, reload=False, log_level="debug")
-        server = uvicorn.Server(config)
-        await server.serve()
-        
-        # Cleanup: disconnect client first so aiohttp session closes, then cancel task
-        await stop_robot_websocket_client()
-        try:
-            robot_task.cancel()
-            await robot_task
-        except asyncio.CancelledError:
-            pass
-    
-    try:
-        asyncio.run(start_services())
-    except KeyboardInterrupt:
-        print("Shutting down...")
-        asyncio.run(stop_robot_websocket_client())
+    from teleop.runtime import run_sync
+
+    run_sync(log_level="debug")

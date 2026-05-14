@@ -2,6 +2,16 @@
 
 A comprehensive RealSense camera management system featuring a standalone REST API server and an advanced ReactJS 3D point cloud viewer with cloud signaling capabilities.
 
+### Install surfaces (quick reference)
+
+| Where | Name | Purpose |
+|--------|------|---------|
+| **PyPI** | [`teleopsh`](https://pypi.org/project/teleopsh/) | `pip install teleopsh` — camera-side Python stack (FastAPI + RealSense + WebRTC + cloud client). CLI: `teleopsh` or `python -m teleop`. |
+| **npm** | [`teleop`](https://www.npmjs.com/package/teleop) | `npx teleop` — thin launcher that runs `python -m teleop` (Python + `teleopsh` still required). See [`packages/teleop/README.md`](packages/teleop/README.md). |
+| **This repo** | editable | `pip install -e .` from clone — same code as PyPI for development. |
+
+Cloud layout (React ↔ Node signaling ↔ robot): see [`CLOUD_ARCHITECTURE.md`](CLOUD_ARCHITECTURE.md).
+
 ## 🏗️ Project Architecture
 
 This project consists of two main components:
@@ -31,8 +41,8 @@ This project consists of two main components:
 
 ### Prerequisites
 
-- **Python 3.8+** with virtual environment
-- **Node.js 16+** and npm
+- **Python 3.10+** (matches [`pyproject.toml`](pyproject.toml) / **`teleopsh`** on PyPI) with a virtual environment recommended
+- **Node.js 18+** and npm (React app and signaling server; npm `teleop` launcher declares `engines.node >= 18`)
 - **Intel RealSense D435i** camera (or compatible)
 - **Network connectivity** for multi-device access
 
@@ -49,11 +59,42 @@ source venv/bin/activate
 # Install Python dependencies
 pip install -r requirements.txt
 
+# Optional: install the camera-side stack as a package (enables `teleopsh`, `python -m teleop`)
+pip install -e .
+
 # Install Node.js dependencies
 cd realsense-react-client
 npm install
 cd ..
 ```
+
+### Teleop CLI (Node-friendly launcher)
+
+The camera-side server is still **Python** (RealSense + WebRTC). For Node developers we publish the **`teleop`** npm package (see [`packages/teleop/README.md`](packages/teleop/README.md)). Install the Python distribution first:
+
+```bash
+pip install teleopsh
+# or from a clone: pip install -e .
+```
+
+Then either:
+
+```bash
+npx teleop -- --cloud http://localhost:3001 --robot-id my-robot
+```
+
+(`--` between `npx` and flags is optional; the launcher strips a leading `--` before calling Python.)
+
+Or use Python only:
+
+```bash
+teleopsh --cloud http://localhost:3001 --robot-id my-robot
+python -m teleop --help
+```
+
+**Port 8000:** the stack binds the API to **`0.0.0.0:8000`** by default. If that port is already in use, pass e.g. `--port 8001` or stop the other process.
+
+This does **not** remove the need for Python or **`pyrealsense2`**; npm only standardizes the entrypoint for Node users.
 
 ### 2. Start All Services
 
@@ -398,6 +439,17 @@ netstat -an | grep :3001
 - **GPU acceleration**: Hardware-accelerated rendering
 - **Compression algorithms**: Advanced data compression
 - **Load balancing**: Distributed processing support
+
+## 📚 Documentation index
+
+| Doc | Contents |
+|-----|----------|
+| [README.md](README.md) (this file) | Repo overview, architecture, **`teleopsh`** / **`teleop`**, quick start |
+| [CLOUD_ARCHITECTURE.md](CLOUD_ARCHITECTURE.md) | Robot ↔ cloud ↔ browser signaling |
+| [packages/teleop/README.md](packages/teleop/README.md) | **npm** package **`teleop`**, `npx`, publishing |
+| [realsense-react-client/README.md](realsense-react-client/README.md) | React UI + dev workflow |
+| [realsense-react-client/server/README.md](realsense-react-client/server/README.md) | Node signaling server |
+| [README_DEMO.md](README_DEMO.md) | WebRTC multi-client demo notes |
 
 ## 🤝 Contributing
 

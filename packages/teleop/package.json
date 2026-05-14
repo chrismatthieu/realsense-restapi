@@ -1,0 +1,27 @@
+{
+  "name": "teleop",
+  "version": "0.1.1",
+  "description": "npx-friendly launcher for the RealSense teleop robot (Python stack).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/realsense-restapi.git"
+  },
+  "keywords": [
+    "realsense",
+    "webrtc",
+    "teleop",
+    "robot",
+    "socket.io"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "teleop": "bin/teleop.cjs"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ]
+}

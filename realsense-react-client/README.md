@@ -2,6 +2,16 @@
 
 A modern React.js web application for connecting to RealSense cameras via WebRTC and viewing 3D point clouds.
 
+## Full stack (repo root)
+
+The **camera-side** service (FastAPI + WebRTC + cloud Socket.IO client) is **Python**. Install and run it from the **parent** [`realsense-restapi`](../README.md) repo:
+
+- **PyPI:** `pip install teleopsh` — CLI `teleopsh` or `python -m teleop`  
+- **npm (launcher only):** [`teleop`](https://www.npmjs.com/package/teleop) — `npx teleop -- …` (still requires Python + `teleopsh`). Details: [`../packages/teleop/README.md`](../packages/teleop/README.md)  
+- **Cloud architecture:** [`../CLOUD_ARCHITECTURE.md`](../CLOUD_ARCHITECTURE.md)
+
+This folder is the **browser UI** and the **Node signaling server** (`server/`). It expects the Python API (default **`http://localhost:8000`**) when you use REST/WebRTC features.
+
 ## Features
 
 - **WebRTC Video Streaming**: Real-time video streaming from RealSense cameras
@@ -48,17 +58,13 @@ A modern React.js web application for connecting to RealSense cameras via WebRTC
 
 ## Prerequisites
 
-- Node.js (v14 or higher)
-- npm or yarn
-- Python RealSense REST API server running (see main project README)
+- **Node.js 18+** and npm (aligned with the root repo and the **`teleop`** npm package)
+- **Python RealSense stack** running for WebRTC/cloud demos — see the [main project README](../README.md) (`pip install teleopsh` / `npx teleop` / `python main.py`)
 
 ## Installation
 
-### Prerequisites
-- Node.js 16+ and npm
-- Python RealSense API server running on `http://localhost:8000`
+### Option 1: Quick Start (script)
 
-### Option 1: Quick Start (Recommended)
 Use the development startup script that runs both the signaling server and React app:
 
 ```bash
@@ -154,7 +160,7 @@ npm run build
 
 ### Docker
 ```dockerfile
-FROM node:16-alpine
+FROM node:18-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm install

@@ -15,6 +15,8 @@ This implementation provides a **robot-to-cloud WebSocket architecture** that en
 └─────────────────┘                 └──────────────────┘                  └─────────────────┘
 ```
 
+The robot process is **Python** (FastAPI + RealSense + aiortc). Node users can start the same stack with **`npx teleop`** after a one-time **`pip install teleopsh`** (or `pip install -e .` from this repo); see `packages/teleop/README.md`. The PyPI package is **`teleopsh`**; the npm CLI remains **`teleop`**.
+
 ### Key Benefits
 
 ✅ **Works behind firewalls** - Robot initiates outbound connection  
