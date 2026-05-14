@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import WebRTCDemo from './pages/WebRTCDemo';
+import WebRTCQuadDemo from './pages/WebRTCQuadDemo';
 import PointCloudDemo from './pages/PointCloudDemo';
 import ApiDocsPage from './pages/ApiDocsPage';
 import './App.css';
@@ -16,6 +17,7 @@ function App() {
             </div>
             <div className="nav-links">
               <Link to="/" className="nav-link">WebRTC Demo</Link>
+              <Link to="/webrtc-quad" className="nav-link">Multi-stream</Link>
               <Link to="/pointcloud" className="nav-link">3D Point Cloud</Link>
               <Link to="/api-docs" className="nav-link">API Docs</Link>
             </div>
@@ -25,6 +27,7 @@ function App() {
         <main className="main-content">
           <Routes>
             <Route path="/" element={<WebRTCDemo />} />
+            <Route path="/webrtc-quad" element={<WebRTCQuadDemo />} />
             <Route path="/pointcloud" element={<PointCloudDemo />} />
             <Route path="/api-docs" element={<ApiDocsPage />} />
           </Routes>
