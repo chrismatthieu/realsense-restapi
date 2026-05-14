@@ -46,15 +46,20 @@ def safe_len(vertices):
     """Safely get the length of vertices, handling NumPy arrays."""
     if vertices is None:
         return 0
-    
-    # Convert to list first if it's a NumPy array
-    if hasattr(vertices, 'tolist'):
+
+    if isinstance(vertices, np.ndarray):
+        if vertices.ndim >= 2 and vertices.shape[1] >= 3:
+            return int(vertices.shape[0])
+        if vertices.ndim == 1 and vertices.size % 3 == 0:
+            return int(vertices.size // 3)
+        return int(vertices.size)
+
+    if hasattr(vertices, "tolist") and not isinstance(vertices, np.ndarray):
         try:
             vertices = vertices.tolist()
         except Exception:
             return 0
-    
-    # Now it should be a list or similar
+
     try:
         return len(vertices)
     except Exception:
@@ -790,7 +795,20 @@ class RealSenseManager:
                                     else:
                                         frame = raw
                                     if self.is_pointcloud_enabled.get(device_id, False):
-                                        points = self.pc.calculate(frame_data)
+                                        try:
+                                            # Intel samples: calculate(depth) then map_to(color|depth) before get_vertices.
+                                            # Depth-only WebRTC pipelines often have no color frame; map_to(depth) still helps.
+                                            points = self.pc.calculate(frame_data)
+                                            try:
+                                                cf = frames.get_color_frame()
+                                                self.pc.map_to(cf if cf else frame_data)
+                                            except Exception as map_err:
+                                                print(f"⚠️ pointcloud map_to: {map_err}")
+                                            if points is None and hasattr(self.pc, "get_points"):
+                                                points = self.pc.get_points()
+                                        except Exception as pc_calc_err:
+                                            print(f"❌ pointcloud calculate: {pc_calc_err}")
+                                            points = None
                                 elif stream_type == rs.stream.color.name:
                                     frame_data = frames.get_color_frame()
                                     frame = frame_data.get_data()
@@ -861,14 +879,26 @@ class RealSenseManager:
                                     if motion_json_data:
                                         metadata["motion_data"] = motion_json_data
 
-                                if points:
+                                if points is not None and hasattr(points, "get_vertices"):
                                     v, t = (
                                         points.get_vertices(),
                                         points.get_texture_coordinates(),
                                     )
-                                    verts = (
-                                        np.asanyarray(v).view(np.float32).reshape(-1, 3)
-                                    )  # xyz
+                                    try:
+                                        verts = np.asanyarray(v).view(np.float32).reshape(
+                                            -1, 3
+                                        )
+                                    except (ValueError, TypeError) as reshape_err:
+                                        flat = np.asanyarray(v, dtype=np.float32).ravel()
+                                        if flat.size % 3 == 0 and flat.size > 0:
+                                            verts = flat.reshape(-1, 3)
+                                        else:
+                                            print(
+                                                f"❌ pointcloud vertices reshape: {reshape_err}, flat.size={getattr(flat, 'size', 0)}"
+                                            )
+                                            verts = np.array([], dtype=np.float32).reshape(
+                                                0, 3
+                                            )
                                     try:
                                         if safe_len(verts) > 0:
                                             finite = np.isfinite(verts).all(axis=1)
@@ -877,15 +907,14 @@ class RealSenseManager:
                                         print(f"❌ Error filtering vertices: {filter_error}")
                                     # texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
                                     
-                                    # Debug logging to see what we're storing
-                                    print(f"🔍 RS_MANAGER: Storing vertices type: {type(verts)}, shape: {verts.shape if hasattr(verts, 'shape') else 'no shape'}")
                                     if safe_len(verts) > 0:
-                                        print(f"🔍 RS_MANAGER: First vertex: {verts[0]}, type: {type(verts[0])}")
-                                    
-                                    metadata["point_cloud"] = {
-                                        "vertices": verts,
-                                        "texture_coordinates": [],
-                                    }
+                                        print(
+                                            f"🔍 RS_MANAGER: Storing vertices shape: {verts.shape}, first: {verts[0]}"
+                                        )
+                                        metadata["point_cloud"] = {
+                                            "vertices": verts,
+                                            "texture_coordinates": [],
+                                        }
 
                                 frame = np.asanyarray(frame)
 

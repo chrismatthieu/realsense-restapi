@@ -223,16 +223,18 @@ class CloudSignalingServer {
       socket.on('activate-pointcloud', (data) => {
         console.log(`📡 Received activate-pointcloud event:`, data);
         const { deviceId, enabled = true } = data;
-        
-        // Find robot for this device
-        const robotId = `robot-${deviceId}`;
-        const robotSocket = this.robots.get(robotId);
-        
+
+        let robotSocket = this.findRobotSocketByCameraDeviceId(deviceId);
+        if (!robotSocket) {
+          robotSocket = this.robots.get(`robot-${deviceId}`);
+        }
+
         if (!robotSocket) {
           socket.emit('pointcloud-error', { error: 'Robot not found for device' });
           return;
         }
-      
+
+        const robotId = robotSocket.robotId || 'unknown';
         console.log(`🔄 ${enabled ? 'Activating' : 'Deactivating'} point cloud for device ${deviceId} via robot ${robotId}`);
         
         // Forward to robot
@@ -244,16 +246,18 @@ class CloudSignalingServer {
       socket.on('start-device-stream', (data) => {
         console.log(`📡 Received start-device-stream event:`, data);
         const { deviceId, streamConfigs } = data;
-        
-        // Find robot for this device
-        const robotId = `robot-${deviceId}`;
-        const robotSocket = this.robots.get(robotId);
-        
+
+        let robotSocket = this.findRobotSocketByCameraDeviceId(deviceId);
+        if (!robotSocket) {
+          robotSocket = this.robots.get(`robot-${deviceId}`);
+        }
+
         if (!robotSocket) {
           socket.emit('pointcloud-error', { error: 'Robot not found for device' });
           return;
         }
-      
+
+        const robotId = robotSocket.robotId || 'unknown';
         console.log(`🔄 Starting device stream for ${deviceId} via robot ${robotId}`);
         
         // Forward to robot
@@ -265,21 +269,37 @@ class CloudSignalingServer {
       socket.on('stop-device-stream', (data) => {
         console.log(`📡 Received stop-device-stream event:`, data);
         const { deviceId } = data;
-        
-        // Find robot for this device
-        const robotId = `robot-${deviceId}`;
-        const robotSocket = this.robots.get(robotId);
-        
+
+        let robotSocket = this.findRobotSocketByCameraDeviceId(deviceId);
+        if (!robotSocket) {
+          robotSocket = this.robots.get(`robot-${deviceId}`);
+        }
+
         if (!robotSocket) {
           socket.emit('pointcloud-error', { error: 'Robot not found for device' });
           return;
         }
-      
+
+        const robotId = robotSocket.robotId || 'unknown';
         console.log(`🔄 Stopping device stream for ${deviceId} via robot ${robotId}`);
         
         // Forward to robot
         robotSocket.emit('stop-device-stream', { deviceId });
         console.log(`✅ stop-device-stream forwarded to robot`);
+      });
+
+      // Offer / errors from robot → originating client (must forward session-error; otherwise client only hits 10s timeout)
+      socket.on('session-error', (data) => {
+        const sessionId = data && data.sessionId;
+        if (!sessionId) {
+          return;
+        }
+        const session = this.sessions.get(sessionId);
+        if (session && session.robotSocket === socket) {
+          console.log(`❌ Forwarding session-error for ${sessionId} to client`);
+          session.clientSocket.emit('session-error', data);
+          this.sessions.delete(sessionId);
+        }
       });
 
       // Handle WebRTC offer (from robot to client)
@@ -380,6 +400,22 @@ class CloudSignalingServer {
   getRobotDeviceInfo(robotId) {
     const robotSocket = this.robots.get(robotId);
     return robotSocket ? robotSocket.deviceInfo : { robotId, status: 'unknown' };
+  }
+
+  /**
+   * Resolve the robot Socket.IO connection that owns a RealSense camera serial.
+   * robotId (e.g. robot-abc123) is NOT robot-${deviceId}; deviceId is the camera serial from deviceInfo.
+   */
+  findRobotSocketByCameraDeviceId(cameraDeviceId) {
+    if (!cameraDeviceId) return null;
+    const want = String(cameraDeviceId);
+    for (const [, robotSocket] of this.robots.entries()) {
+      const d = robotSocket.deviceInfo && robotSocket.deviceInfo.deviceId;
+      if (d != null && String(d) === want) {
+        return robotSocket;
+      }
+    }
+    return null;
   }
 
   generateSessionId() {

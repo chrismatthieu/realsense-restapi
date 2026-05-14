@@ -6,7 +6,13 @@ import time
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import cv2
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCConfiguration, RTCIceServer
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCConfiguration,
+    RTCIceServer,
+    RTCBundlePolicy,
+)
 from aiortc.mediastreams import VideoStreamTrack
 from av import VideoFrame
 from app.core.errors import RealSenseError
@@ -46,9 +52,16 @@ def safe_len(vertices):
     """Safely get the length of vertices, handling NumPy arrays."""
     if vertices is None:
         return 0
-    
+
+    if isinstance(vertices, np.ndarray):
+        if vertices.ndim >= 2 and vertices.shape[1] >= 3:
+            return int(vertices.shape[0])
+        if vertices.ndim == 1 and vertices.size % 3 == 0:
+            return int(vertices.size // 3)
+        return int(vertices.size)
+
     # Convert to list first if it's a NumPy array
-    if hasattr(vertices, 'tolist'):
+    if hasattr(vertices, 'tolist') and not isinstance(vertices, np.ndarray):
         try:
             vertices = vertices.tolist()
         except Exception:
@@ -59,6 +72,96 @@ def safe_len(vertices):
         return len(vertices)
     except Exception:
         return 0
+
+
+def normalize_vertices_for_json(vertices):
+    """Turn mixed numpy/list vertex rows into plain [[x,y,z], ...] for JSON + browser."""
+    if not vertices:
+        return []
+    out = []
+    for v in vertices:
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)) and len(v) >= 3:
+            try:
+                out.append([float(v[0]), float(v[1]), float(v[2])])
+            except (TypeError, ValueError):
+                continue
+            continue
+        if isinstance(v, np.ndarray) and v.size >= 3:
+            try:
+                a = np.asarray(v, dtype=np.float64).reshape(-1)[:3]
+                out.append([float(a[0]), float(a[1]), float(a[2])])
+            except Exception:
+                continue
+            continue
+        if hasattr(v, "__iter__") and not isinstance(v, (str, bytes, dict)):
+            try:
+                t = list(v)
+                if len(t) >= 3:
+                    out.append([float(t[0]), float(t[1]), float(t[2])])
+            except Exception:
+                continue
+    return out
+
+
+def vertices_to_json_list(vertices_data: Any, max_vertices: int = 3000) -> list:
+    """
+    Build a small JSON-friendly [[x,y,z], ...] list for the data channel.
+
+    RealSense depth clouds are often ~200k–300k points. The old path called
+    ``.tolist()`` on the full ndarray then normalized every row in Python, which
+    blocked the asyncio event loop for many seconds (or OOM), so nothing was
+    ever sent despite the SCTP channel being open.
+    """
+    if vertices_data is None:
+        return []
+    max_vertices = max(1, int(max_vertices))
+
+    # Already small list/tuple rows
+    if isinstance(vertices_data, list):
+        if len(vertices_data) <= max_vertices:
+            return normalize_vertices_for_json(vertices_data)
+        return normalize_vertices_for_json(vertices_data[:max_vertices])
+
+    if isinstance(vertices_data, np.ndarray):
+        v = np.ascontiguousarray(vertices_data)
+        if v.dtype.names:
+            try:
+                names = list(v.dtype.names)[:3]
+                v = np.stack([v[n].astype(np.float64, copy=False) for n in names], axis=-1)
+            except Exception:
+                v = np.ascontiguousarray(v.astype(np.float64))
+        else:
+            v = np.ascontiguousarray(v.astype(np.float64, copy=False))
+
+        if v.ndim == 1:
+            if v.size % 3 != 0 or v.size == 0:
+                return normalize_vertices_for_json(safe_convert_vertices(vertices_data))
+            v = v.reshape(-1, 3)
+        elif v.ndim == 2:
+            if v.shape[1] < 3:
+                return []
+            v = v[:, :3]
+        else:
+            return normalize_vertices_for_json(safe_convert_vertices(vertices_data))
+
+        finite = np.isfinite(v).all(axis=1)
+        v = v[finite]
+        n = v.shape[0]
+        if n == 0:
+            return []
+        if n > max_vertices:
+            # Evenly spaced indices across the cloud (cheap vs random)
+            idx = np.linspace(0, n - 1, max_vertices, dtype=np.int64)
+            v = v[idx]
+        return v.tolist()
+
+    # Slow path for exotic iterators (keep small)
+    conv = safe_convert_vertices(vertices_data)
+    if len(conv) > max_vertices:
+        conv = conv[:max_vertices]
+    return normalize_vertices_for_json(conv)
 
 
 def frame_to_rgb(frame_data: np.ndarray, stream_type: str) -> np.ndarray:
@@ -396,8 +499,8 @@ class WebRTCManager:
                         self.realsense_manager.stop_stream(device_id)
                         self.realsense_manager.start_stream(device_id, stream_configs)
                         
-                        # Enable point cloud processing if pointcloud stream is requested
-                        if any(stream_type == "pointcloud" for stream_type in stream_types):
+                        # Enable point cloud when depth is streamed (WebRTC sends vertices on data channel)
+                        if any(st == "pointcloud" for st in stream_types) or any(st == "depth" for st in stream_types):
                             self.realsense_manager.activate_point_cloud(device_id, True)
                         
                         # Update stored configuration
@@ -439,8 +542,8 @@ class WebRTCManager:
                         print(f"Starting device stream for {device_id} with {len(stream_configs)} stream types")
                         self.realsense_manager.start_stream(device_id, stream_configs)
                         
-                        # Enable point cloud processing if pointcloud stream is requested
-                        if any(stream_type == "pointcloud" for stream_type in stream_types):
+                        # Enable point cloud when depth is streamed (WebRTC sends vertices on data channel)
+                        if any(st == "pointcloud" for st in stream_types) or any(st == "depth" for st in stream_types):
                             self.realsense_manager.activate_point_cloud(device_id, True)
                         
                         # Store configuration after successful start
@@ -542,9 +645,14 @@ class WebRTCManager:
                             # Start new stream with updated configuration
                             self.realsense_manager.start_stream(device_id, stream_configs)
                             
-                            # Disable point cloud processing if no pointcloud streams remain
-                            if not any(stream_type == "pointcloud" for stream_type in self.stream_references.get(device_id, {})):
+                            # Point cloud vertices: keep on while any depth or pointcloud consumer exists
+                            refs = self.stream_references.get(device_id, {})
+                            depth_refs = int(refs.get("depth", 0) or 0)
+                            pc_refs = int(refs.get("pointcloud", 0) or 0)
+                            if depth_refs <= 0 and pc_refs <= 0:
                                 self.realsense_manager.activate_point_cloud(device_id, False)
+                            else:
+                                self.realsense_manager.activate_point_cloud(device_id, True)
                             
                             # Update stored configuration
                             self.device_stream_configs[device_id] = {
@@ -605,14 +713,21 @@ class WebRTCManager:
 
     async def create_offer(self, device_id: str, stream_types: List[str], session_id: str = None) -> Tuple[str, dict]:
         """Create a WebRTC offer for device streams."""
-        # Check if we have too many active sessions
+        # Count all signaling + active PCs (half-open sessions used to be ignored and could pile up).
         async with self.lock:
-            active_sessions = len([s for s in self.sessions.values() if s.get("connected", False)])
+            active_sessions = len(self.sessions)
             if active_sessions >= self.max_concurrent_sessions:
                 raise RealSenseError(
                     status_code=429, 
                     detail=f"Maximum concurrent sessions ({self.max_concurrent_sessions}) reached. Please wait for a session to close."
                 )
+
+        # Re-use the same cloud session id: close any stale PC first (client retry / partial negotiate).
+        if session_id:
+            async with self.lock:
+                stale = session_id in self.sessions
+            if stale:
+                await self.close_session(session_id)
 
         # Track if we need to rollback references on failure
         references_added = False
@@ -695,29 +810,22 @@ class WebRTCManager:
                 break
 
             # Create peer connection
-            pc = RTCPeerConnection(RTCConfiguration(iceServers=self.ice_servers))
+            # MAX_BUNDLE + createDataChannel *after* addTrack so SCTP reuses the first media
+            # transport's ICE/DTLS. Creating the channel first gives SCTP its own gatherer;
+            # the browser then often completes video ICE but not SCTP, so the data channel
+            # never opens and point cloud stays at 0 vertices.
+            pc = RTCPeerConnection(
+                RTCConfiguration(
+                    iceServers=self.ice_servers,
+                    bundlePolicy=RTCBundlePolicy.MAX_BUNDLE,
+                )
+            )
 
             # Use provided session ID or generate a new one
             if session_id is None:
                 session_id = str(uuid.uuid4())
 
-            # Create data channel for point cloud data when depth or pointcloud session is active
-            data_channel = None
-            if "depth" in stream_types or "pointcloud" in stream_types:
-                data_channel = pc.createDataChannel("pointcloud-data")
-                
-                # Set up data channel event handlers
-                @data_channel.on("open")
-                def on_open():
-                    print(f"📡 Data channel opened for session {session_id}")
-                    # Start sending point cloud data
-                    asyncio.create_task(self._send_point_cloud_data(session_id, device_id))
-                
-                @data_channel.on("close")
-                def on_close():
-                    print(f"📡 Data channel closed for session {session_id}")
-
-            # Add video tracks for each stream type
+            # Add video tracks for each stream type (must exist before createDataChannel for bundling)
             video_tracks = []
             for stream_type in stream_types:
                 if stream_type == "pointcloud":
@@ -728,6 +836,31 @@ class WebRTCManager:
                     video_track = RealSenseVideoTrack(self.realsense_manager, device_id, stream_type, session_id)
                 pc.addTrack(video_track)
                 video_tracks.append(video_track)
+
+            # Create data channel for point cloud data when depth or pointcloud session is active
+            data_channel = None
+            if "depth" in stream_types or "pointcloud" in stream_types:
+                # Negotiated id must match realsense-react-client PointCloudDemo.js (id: 0).
+                # Some browsers never fire ondatachannel for aiortc's DCEP-open path while ICE is fine.
+                data_channel = pc.createDataChannel(
+                    "pointcloud-data",
+                    negotiated=True,
+                    id=0,
+                )
+                _loop = asyncio.get_running_loop()
+
+                @data_channel.on("open")
+                def on_open():
+                    print(f"📡 Data channel opened for session {session_id}")
+                    try:
+                        _loop.create_task(self._send_point_cloud_data(session_id, device_id))
+                    except Exception as e:
+                        import traceback
+                        print(f"❌ Failed to schedule point cloud sender: {e}\n{traceback.format_exc()}")
+                
+                @data_channel.on("close")
+                def on_close():
+                    print(f"📡 Data channel closed for session {session_id}")
 
             # Set up connection state change handler
             async def on_connection_state_change():
@@ -801,41 +934,67 @@ class WebRTCManager:
                     self.sessions[session_id]["connected"] = True
                     self.sessions[session_id]["last_activity"] = time.time()
 
+            # Fallback: SCTP "open" can race with handler registration; start sender if channel already open
+            async def _maybe_start_point_cloud_sender_delayed():
+                await asyncio.sleep(0.5)
+                async with self.lock:
+                    s = self.sessions.get(session_id)
+                    if not s or s.get("point_cloud_sender_running"):
+                        return
+                    dc = s.get("data_channel")
+                    dev = s.get("device_id")
+                    if not dc or not dev:
+                        return
+                    if getattr(dc, "readyState", None) != "open":
+                        return
+                    st = s.get("stream_types") or []
+                    if "depth" not in st and "pointcloud" not in st:
+                        return
+                _loop = asyncio.get_running_loop()
+                _loop.create_task(self._send_point_cloud_data(session_id, dev))
+
+            asyncio.create_task(_maybe_start_point_cloud_sender_delayed())
+
             return True
         except Exception as e:
             raise RealSenseError(status_code=400, detail=f"Error processing answer: {str(e)}")
 
-    async def add_ice_candidate(self, session_id: str, candidate: str, sdp_mid: str, sdp_mline_index: int) -> bool:
-        """Add an ICE candidate to a session."""
+    async def add_ice_candidate(
+        self,
+        session_id: str,
+        candidate: Optional[str],
+        sdp_mid: Optional[str],
+        sdp_mline_index: int,
+    ) -> bool:
+        """Add trickle ICE from the browser. Invalid host candidates prevented SCTP (data channels) from working."""
+        from aiortc.sdp import candidate_from_sdp
+
         async with self.lock:
             if session_id not in self.sessions:
                 raise RealSenseError(status_code=404, detail=f"Session {session_id} not found")
 
             session = self.sessions[session_id]
             pc = session["pc"]
-
-            # Update last activity
             session["last_activity"] = time.time()
 
-        # Add ICE candidate
         try:
-            candidate_obj = RTCIceCandidate(
-                component=1,
-                foundation="0",
-                ip="0.0.0.0",
-                port=0,
-                priority=0,
-                protocol="udp",
-                type="host",
-                sdpMid=sdp_mid,
-                sdpMLineIndex=sdp_mline_index
-            )
-            candidate_obj.candidate = candidate
+            if candidate is None or (isinstance(candidate, str) and not candidate.strip()):
+                await pc.addIceCandidate(None)
+                return True
 
-            await pc.addIceCandidate(candidate_obj)
+            line = candidate.strip()
+            if line.startswith("candidate:"):
+                line = line[len("candidate:") :].lstrip()
+
+            cand = candidate_from_sdp(line)
+            cand.sdpMid = sdp_mid
+            cand.sdpMLineIndex = int(sdp_mline_index)
+
+            await pc.addIceCandidate(cand)
             return True
         except Exception as e:
-            raise RealSenseError(status_code=400, detail=f"Error adding ICE candidate: {str(e)}")
+            print(f"❌ Error adding ICE candidate: {e}")
+            return False
 
     async def get_ice_candidates(self, session_id: str) -> List[dict]:
         """Get ICE candidates for a session."""
@@ -1034,60 +1193,45 @@ class WebRTCManager:
 
     async def _cleanup_sessions(self):
         """Clean up old or disconnected sessions."""
+        removed: List[Tuple[str, str, List[str], Any]] = []
+
         async with self.lock:
             now = time.time()
             session_ids = list(self.sessions.keys())
 
             for session_id in session_ids:
-                session = self.sessions[session_id]
+                session = self.sessions.get(session_id)
+                if not session:
+                    continue
 
-                # Remove sessions that should be cleaned up
+                drop = False
                 if session.get("should_cleanup", False):
-                    try:
-                        await session["pc"].close()
-                    except Exception:
-                        pass
-                    
-                    # Decrement stream references
+                    drop = True
+                elif now - session["created_at"] > self.session_timeout:
+                    drop = True
+                elif now - session["last_activity"] > 1800:
+                    drop = True
+                elif not session.get("connected", False) and (now - session["created_at"]) > 120:
+                    drop = True
+
+                if drop:
+                    pc = session["pc"]
                     device_id = session["device_id"]
                     stream_types = session["stream_types"]
-                    await self._decrement_stream_references(device_id, stream_types)
-                    
+                    removed.append((session_id, device_id, stream_types, pc))
                     del self.sessions[session_id]
-                    continue
 
-                # Remove sessions older than timeout
-                if now - session["created_at"] > self.session_timeout:
-                    try:
-                        await session["pc"].close()
-                    except Exception:
-                        pass
-                    
-                    # Decrement stream references
-                    device_id = session["device_id"]
-                    stream_types = session["stream_types"]
-                    await self._decrement_stream_references(device_id, stream_types)
-                    
-                    del self.sessions[session_id]
-                    continue
+        for _sid, device_id, stream_types, pc in removed:
+            try:
+                await pc.close()
+            except Exception:
+                pass
+            try:
+                await self._decrement_stream_references(device_id, stream_types)
+            except Exception as e:
+                print(f"Error decrementing stream references during cleanup: {e}")
 
-                # Remove sessions with no activity for 30 minutes
-                if now - session["last_activity"] > 1800:  # 30 minutes
-                    try:
-                        await session["pc"].close()
-                    except Exception:
-                        pass
-                    
-                    # Decrement stream references
-                    device_id = session["device_id"]
-                    stream_types = session["stream_types"]
-                    await self._decrement_stream_references(device_id, stream_types)
-                    
-                    del self.sessions[session_id]
-                    continue
-
-        # Schedule next cleanup
-        await asyncio.sleep(60)  # Run cleanup every minute
+        await asyncio.sleep(60)
         asyncio.create_task(self._cleanup_sessions())
 
     async def _send_point_cloud_data(self, session_id: str, device_id: str):
@@ -1097,21 +1241,38 @@ class WebRTCManager:
         
         try:
             print(f"🚀 Starting point cloud data transmission for session {session_id}")
-            
-            # Get the data channel for this session
+
             async with self.lock:
                 session_data = self.sessions.get(session_id)
                 if not session_data:
                     print(f"❌ Session {session_id} not found")
                     return
+                if session_data.get("point_cloud_sender_running"):
+                    print(f"📡 Point cloud sender already running for {session_id}, skipping duplicate start")
+                    return
                 data_channel = session_data.get("data_channel")
                 if not data_channel:
                     print(f"❌ No data channel found for session {session_id}")
                     return
+                session_data["point_cloud_sender_running"] = True
+
+            # Prove SCTP path to browser immediately (heartbeat was only every 30s before).
+            try:
+                if data_channel.readyState == "open":
+                    hb0 = {
+                        "type": "heartbeat",
+                        "timestamp": time.time(),
+                        "session_id": session_id,
+                    }
+                    data_channel.send(json.dumps(hb0))
+                    print(f"💓 Initial heartbeat sent for session {session_id}")
+            except Exception as e:
+                print(f"❌ Initial heartbeat failed for {session_id}: {e}")
             
             # Add keep-alive mechanism
             last_heartbeat = time.time()
             heartbeat_interval = 30  # Send heartbeat every 30 seconds
+            last_no_vertices_log = 0.0
             
             while True:
                 try:
@@ -1144,8 +1305,11 @@ class WebRTCManager:
                                 print(f"❌ Heartbeat error: {heartbeat_error}")
                                 break
                     
-                    # Get latest point cloud data
-                    point_cloud_data = self.realsense_manager.get_latest_metadata(device_id, "depth")
+                    try:
+                        point_cloud_data = self.realsense_manager.get_latest_metadata(device_id, "depth")
+                    except Exception:
+                        await asyncio.sleep(0.05)
+                        continue
                     
                     # Temporarily disable debug logging to avoid NumPy array boolean context issues
                     # TODO: Re-enable once NumPy array issues are resolved
@@ -1168,6 +1332,18 @@ class WebRTCManager:
                     
                     point_cloud = point_cloud_data.get("point_cloud")
                     if point_cloud is None:
+                        nowm = time.monotonic()
+                        if nowm - last_no_vertices_log > 3.0:
+                            last_no_vertices_log = nowm
+                            keys = (
+                                list(point_cloud_data.keys())
+                                if isinstance(point_cloud_data, dict)
+                                else []
+                            )
+                            print(
+                                f"📡 Session {session_id}: depth metadata has no point_cloud "
+                                f"(keys={keys}, device={device_id})"
+                            )
                         await asyncio.sleep(0.02)
                         continue
                     
@@ -1178,6 +1354,13 @@ class WebRTCManager:
                     
                     vertices_count = safe_len(vertices_data)
                     if vertices_count <= 0:
+                        nowm = time.monotonic()
+                        if nowm - last_no_vertices_log > 3.0:
+                            last_no_vertices_log = nowm
+                            print(
+                                f"📡 Session {session_id}: point_cloud.vertices empty or invalid "
+                                f"(raw count={vertices_count}, device={device_id})"
+                            )
                         await asyncio.sleep(0.02)
                         continue
 
@@ -1186,26 +1369,16 @@ class WebRTCManager:
                         await asyncio.sleep(0.02)
                         continue
 
-                    # Send point cloud data through data channel
-                    vertices = safe_convert_vertices(vertices_data)
+                    # Send point cloud data through data channel (never full-res .tolist(); see vertices_to_json_list)
+                    max_vertices = 3000
+                    vertices = vertices_to_json_list(vertices_data, max_vertices=max_vertices)
 
-                    if safe_len(vertices) == 0:
+                    if len(vertices) == 0:
                         await asyncio.sleep(0.02)
                         continue
 
-                    if safe_len(vertices) > 0:
-                        first_vertex = vertices[0]
-                        if hasattr(first_vertex, "tolist"):
-                            first_vertex = first_vertex.tolist()
-                        if not isinstance(first_vertex, (list, tuple)) or len(first_vertex) != 3:
-                            print(f"❌ Invalid vertex format: {first_vertex}")
-                            await asyncio.sleep(0.05)
-                            continue
-
-                    max_vertices = 3000
-
-                    if safe_len(vertices) > max_vertices:
-                        original_count = safe_len(vertices)
+                    if len(vertices) > max_vertices:
+                        original_count = len(vertices)
                         vertices = vertices[:max_vertices]
                         print(f"📡 Limiting point cloud data to {max_vertices} vertices (original: {original_count})")
 
@@ -1214,28 +1387,28 @@ class WebRTCManager:
                         "device_id": device_id,
                         "vertices": vertices,
                         "timestamp": time.time(),
-                        "total_vertices": safe_len(vertices),
-                        "sent_vertices": safe_len(vertices),
+                        "total_vertices": len(vertices),
+                        "sent_vertices": len(vertices),
                     }
 
                     try:
                         max_vertices_per_chunk = 3000
 
-                        if safe_len(vertices) <= max_vertices_per_chunk:
+                        if len(vertices) <= max_vertices_per_chunk:
                             json_data = json.dumps(data_message)
                             data_channel.send(json_data)
-                            print(f"📡 Sent point cloud data: {safe_len(vertices)} vertices (JSON size: {len(json_data)} bytes)")
+                            print(f"📡 Sent point cloud data: {len(vertices)} vertices (JSON size: {len(json_data)} bytes)")
                         else:
                             import uuid
 
                             message_id = str(uuid.uuid4())
-                            total_chunks = (safe_len(vertices) + max_vertices_per_chunk - 1) // max_vertices_per_chunk
+                            total_chunks = (len(vertices) + max_vertices_per_chunk - 1) // max_vertices_per_chunk
 
-                            print(f"📡 Sending large point cloud data in {total_chunks} chunks: {safe_len(vertices)} vertices")
+                            print(f"📡 Sending large point cloud data in {total_chunks} chunks: {len(vertices)} vertices")
 
                             for chunk_index in range(total_chunks):
                                 start_vertex = chunk_index * max_vertices_per_chunk
-                                end_vertex = min(start_vertex + max_vertices_per_chunk, safe_len(vertices))
+                                end_vertex = min(start_vertex + max_vertices_per_chunk, len(vertices))
                                 chunk_vertices = vertices[start_vertex:end_vertex]
 
                                 chunk_message = {
@@ -1243,8 +1416,8 @@ class WebRTCManager:
                                     "device_id": device_id,
                                     "vertices": chunk_vertices,
                                     "timestamp": time.time(),
-                                    "total_vertices": safe_len(vertices),
-                                    "sent_vertices": safe_len(chunk_vertices),
+                                    "total_vertices": len(vertices),
+                                    "sent_vertices": len(chunk_vertices),
                                     "message_id": message_id,
                                     "chunk_index": chunk_index,
                                     "total_chunks": total_chunks,
@@ -1254,21 +1427,19 @@ class WebRTCManager:
 
                                 chunk_json = json.dumps(chunk_message)
                                 data_channel.send(chunk_json)
-                                print(f"📡 Sent chunk {chunk_index + 1}/{total_chunks} with {safe_len(chunk_vertices)} vertices (JSON size: {len(chunk_json)} bytes)")
+                                print(f"📡 Sent chunk {chunk_index + 1}/{total_chunks} with {len(chunk_vertices)} vertices (JSON size: {len(chunk_json)} bytes)")
                                 await asyncio.sleep(0.0001)
 
                             print(f"📡 Completed sending {total_chunks} chunks for message {message_id}")
 
                     except Exception as json_error:
                         print(f"❌ JSON serialization error: {json_error}")
-                        if hasattr(vertices, "tolist"):
-                            vertices = vertices.tolist()
-                        vertices = vertices[:1000]
+                        vertices = normalize_vertices_for_json(vertices)[:1000]
                         data_message["vertices"] = vertices
-                        data_message["sent_vertices"] = safe_len(vertices)
+                        data_message["sent_vertices"] = len(vertices)
                         json_data = json.dumps(data_message)
                         data_channel.send(json_data)
-                        print(f"📡 Sent reduced point cloud data: {safe_len(vertices)} vertices")
+                        print(f"📡 Sent reduced point cloud data: {len(vertices)} vertices")
                     
                     # Wait before sending next update - increased to 30 FPS for smoother updates
                     await asyncio.sleep(0.033)  # ~30 FPS
@@ -1285,4 +1456,7 @@ class WebRTCManager:
         except Exception as e:
             print(f"❌ Error in point cloud data transmission: {str(e)}")
         finally:
+            async with self.lock:
+                if session_id in self.sessions:
+                    self.sessions[session_id]["point_cloud_sender_running"] = False
             print(f"🛑 Stopped point cloud data transmission for session {session_id}")

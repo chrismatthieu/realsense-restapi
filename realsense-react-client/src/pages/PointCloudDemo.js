@@ -252,52 +252,68 @@ const PointCloudDemo = () => {
           logMessage(`🧊 ICE connection state: ${pc.iceConnectionState}`);
         };
 
-        // Register before setRemoteDescription — the offer includes a server-created data channel,
-        // and ondatachannel can fire during negotiation.
+        const wirePointCloudDataChannel = (dataChannel) => {
+          logMessage(
+            `📡 Point cloud data channel: label=${dataChannel.label} id=${dataChannel.id} negotiated=${dataChannel.negotiated} state=${dataChannel.readyState}`
+          );
+
+          dataChannel.onopen = () => {
+            logMessage(`📡 Point cloud data channel open (readyState=${dataChannel.readyState})`);
+          };
+
+          dataChannel.onmessage = (ev) => {
+            try {
+              const data = JSON.parse(ev.data);
+              const preview = JSON.stringify(data).substring(0, 200);
+              logMessage(`📡 Raw data received: ${preview}...`);
+
+              if (data.type === 'heartbeat') {
+                logMessage(`💓 Received heartbeat for session ${data.session_id}`);
+                return;
+              }
+
+              if (data.type === 'pointcloud-data' && data.vertices) {
+                if (data.chunk_info) {
+                  handleChunkedPointCloudData(data);
+                } else {
+                  logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
+                  logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
+                  updatePointCloudWithData(data.vertices);
+                }
+              }
+            } catch (err) {
+              logMessage(`❌ Error parsing data channel message: ${err.message}`);
+            }
+          };
+
+          dataChannel.onclose = () => {
+            logMessage('📡 WebRTC data channel closed');
+          };
+
+          dataChannel.onerror = (err) => {
+            logMessage(`❌ WebRTC data channel error: ${err.message || err}`);
+          };
+        };
+
+        // Fallback if server ever sends a non-negotiated inbound channel only.
         pc.ondatachannel = (event) => {
           const dataChannel = event.channel;
-          logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
-
           if (dataChannel.label === 'pointcloud-data') {
-            logMessage('📡 WebRTC data channel opened for point cloud data');
-
-            dataChannel.onmessage = (ev) => {
-              try {
-                const data = JSON.parse(ev.data);
-                const preview = JSON.stringify(data).substring(0, 200);
-                logMessage(`📡 Raw data received: ${preview}...`);
-
-                if (data.type === 'heartbeat') {
-                  logMessage(`💓 Received heartbeat for session ${data.session_id}`);
-                  return;
-                }
-
-                if (data.type === 'pointcloud-data' && data.vertices) {
-                  if (data.chunk_info) {
-                    handleChunkedPointCloudData(data);
-                  } else {
-                    logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
-                    logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
-                    updatePointCloudWithData(data.vertices);
-                  }
-                }
-              } catch (err) {
-                logMessage(`❌ Error parsing data channel message: ${err.message}`);
-              }
-            };
-
-            dataChannel.onclose = () => {
-              logMessage('📡 WebRTC data channel closed');
-            };
-
-            dataChannel.onerror = (err) => {
-              logMessage(`❌ WebRTC data channel error: ${err.message || err}`);
-            };
+            logMessage(`📡 Inbound data channel (ondatachannel): state=${dataChannel.readyState}`);
+            wirePointCloudDataChannel(dataChannel);
           }
         };
 
         // Set remote description
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        // Must match app/services/webrtc_manager.py createDataChannel(..., negotiated=True, id=0).
+        const negotiatedDc = pc.createDataChannel('pointcloud-data', {
+          negotiated: true,
+          id: 0,
+          ordered: true,
+        });
+        wirePointCloudDataChannel(negotiatedDc);
 
         // Create answer
         const answer = await pc.createAnswer();
@@ -378,52 +394,6 @@ const PointCloudDemo = () => {
       
       return newMessages;
     });
-  };
-
-  /**
-   * Register before setRemoteDescription: the offer includes a datachannel from the robot,
-   * so ondatachannel can fire during setRemoteDescription and would be missed if hooked later.
-   */
-  const attachPointCloudDataChannelHandlers = (pc) => {
-    pc.ondatachannel = (event) => {
-      const dataChannel = event.channel;
-      logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
-
-      if (dataChannel.label !== 'pointcloud-data') {
-        return;
-      }
-
-      logMessage('📡 WebRTC data channel opened for point cloud data');
-
-      dataChannel.onmessage = (msgEvent) => {
-        try {
-          const data = JSON.parse(msgEvent.data);
-
-          if (data.type === 'heartbeat') {
-            return;
-          }
-
-          if (data.type === 'pointcloud-data' && data.vertices) {
-            if (data.chunk_info) {
-              handleChunkedPointCloudData(data);
-            } else {
-              logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
-              updatePointCloudWithData(data.vertices);
-            }
-          }
-        } catch (error) {
-          logMessage(`❌ Error parsing data channel message: ${error.message}`);
-        }
-      };
-
-      dataChannel.onclose = () => {
-        logMessage('📡 WebRTC data channel closed');
-      };
-
-      dataChannel.onerror = (error) => {
-        logMessage(`❌ WebRTC data channel error: ${error.message || error}`);
-      };
-    };
   };
 
   const updatePointCloudWithData = (vertices) => {

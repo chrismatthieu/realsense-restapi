@@ -128,26 +128,41 @@ class CloudSignalingService {
         streamTypes
       });
 
-      // Listen for the offer response
+      let settled = false;
+      let timer = null;
+      const done = (fn) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        fn();
+      };
+
       const offerHandler = (data) => {
-        resolve(data);
-        this.removeEventListener('webrtc-offer', offerHandler);
+        done(() => {
+          this.removeEventListener('webrtc-offer', offerHandler);
+          this.removeEventListener('session-error', errorHandler);
+          resolve(data);
+        });
       };
 
       const errorHandler = (error) => {
-        reject(new Error(error.error || 'Failed to create session'));
-        this.removeEventListener('session-error', errorHandler);
+        done(() => {
+          this.removeEventListener('webrtc-offer', offerHandler);
+          this.removeEventListener('session-error', errorHandler);
+          reject(new Error(error.error || 'Failed to create session'));
+        });
       };
 
       this.addEventListener('webrtc-offer', offerHandler);
       this.addEventListener('session-error', errorHandler);
 
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        this.removeEventListener('webrtc-offer', offerHandler);
-        this.removeEventListener('session-error', errorHandler);
-        reject(new Error('Session creation timeout'));
-      }, 10000);
+      timer = setTimeout(() => {
+        done(() => {
+          this.removeEventListener('webrtc-offer', offerHandler);
+          this.removeEventListener('session-error', errorHandler);
+          reject(new Error('Session creation timeout'));
+        });
+      }, 30000);
     });
   }
 

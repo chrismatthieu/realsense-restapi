@@ -307,15 +307,11 @@ class RobotWebSocketClient:
             import os
             sys.path.append(os.path.dirname(os.path.abspath(__file__)))
             
-            from app.services.webrtc_manager import WebRTCManager
-            from app.api.dependencies import get_realsense_manager
-            
-            # Get the existing realsense manager instance
-            realsense_manager = get_realsense_manager()
-            
-            # Create WebRTC offer using local WebRTC manager
-            self.webrtc_manager = WebRTCManager(realsense_manager)
-            offer_response = await self.webrtc_manager.create_offer(device_id, stream_types, session_id)
+            from app.api.dependencies import get_webrtc_manager
+
+            webrtc_manager = get_webrtc_manager()
+
+            offer_response = await webrtc_manager.create_offer(device_id, stream_types, session_id)
             
             if offer_response:
                 api_session_id, offer_dict = offer_response
@@ -327,7 +323,6 @@ class RobotWebSocketClient:
                     "deviceId": device_id,
                     "streamTypes": stream_types,
                     "apiSessionId": api_session_id,
-                    "webrtcManager": self.webrtc_manager,
                     "createdAt": datetime.now()
                 }
                 
@@ -384,17 +379,11 @@ class RobotWebSocketClient:
             return
         
         logger.info(f"🔄 Using API session ID {api_session_id} for stream type switch")
-        
-        # Get the WebRTC manager from the session data
-        webrtc_manager = session_data.get('webrtcManager')
-        if not webrtc_manager:
-            logger.error(f"❌ WebRTC manager not found for cloud session {cloud_session_id}")
-            await self.sio.emit('stream-type-switch-error', {
-                'sessionId': cloud_session_id,
-                'error': 'WebRTC manager not found'
-            })
-            return
-        
+
+        from app.api.dependencies import get_webrtc_manager
+
+        webrtc_manager = get_webrtc_manager()
+
         try:
             # Switch stream types in the existing session using API session ID
             success = await webrtc_manager.switch_stream_type(api_session_id, new_stream_types)
@@ -429,10 +418,9 @@ class RobotWebSocketClient:
         if session_id in self.sessions:
             try:
                 session_data = self.sessions[session_id]
-                webrtc_manager = session_data["webrtcManager"]
-                
-                # Process answer using local WebRTC manager
-                await webrtc_manager.process_answer(
+                from app.api.dependencies import get_webrtc_manager
+
+                await get_webrtc_manager().process_answer(
                     session_data["apiSessionId"],
                     answer["sdp"],
                     answer["type"]
@@ -446,19 +434,29 @@ class RobotWebSocketClient:
     async def handle_ice_candidate(self, data: Dict[str, Any]):
         """Handle ICE candidate from client"""
         session_id = data["sessionId"]
-        candidate = data["candidate"]
-        
+
         if session_id in self.sessions:
             try:
                 session_data = self.sessions[session_id]
-                webrtc_manager = session_data["webrtcManager"]
-                
-                # Add ICE candidate using local WebRTC manager
-                await webrtc_manager.add_ice_candidate(
-                    session_data["apiSessionId"],
-                    candidate["candidate"],
-                    candidate["sdpMid"],
-                    candidate["sdpMLineIndex"]
+                from app.api.dependencies import get_webrtc_manager
+
+                cand = data.get("candidate")
+                if cand is None:
+                    await get_webrtc_manager().add_ice_candidate(
+                        session_data["apiSessionId"], None, None, 0
+                    )
+                    return
+                if isinstance(cand, dict):
+                    line = cand.get("candidate")
+                    mid = cand.get("sdpMid")
+                    mline = int(cand.get("sdpMLineIndex", 0) or 0)
+                else:
+                    line = str(cand) if cand else None
+                    mid = data.get("sdpMid")
+                    mline = int(data.get("sdpMLineIndex", 0) or 0)
+
+                await get_webrtc_manager().add_ice_candidate(
+                    session_data["apiSessionId"], line, mid, mline
                 )
                 logger.debug(f"✅ Added ICE candidate for session {session_id}")
             except Exception as e:
@@ -475,10 +473,9 @@ class RobotWebSocketClient:
             # Clean up WebRTC session using local WebRTC manager
             try:
                 session_data = self.sessions[session_id]
-                webrtc_manager = session_data["webrtcManager"]
-                
-                # Close session using local WebRTC manager
-                await webrtc_manager.close_session(session_data["apiSessionId"])
+                from app.api.dependencies import get_webrtc_manager
+
+                await get_webrtc_manager().close_session(session_data["apiSessionId"])
                 logger.info(f"✅ Closed WebRTC session {session_id}")
             except Exception as e:
                 logger.error(f"❌ Error closing WebRTC session {session_id}: {e}")
@@ -546,8 +543,10 @@ class RobotWebSocketClient:
             # Activate/deactivate point cloud via RealSense manager
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                async with session.post(f'http://localhost:8000/api/devices/{device_id}/point_cloud/activate', 
-                                      json={'enabled': enabled}) as response:
+                path = "activate" if enabled else "deactivate"
+                async with session.post(
+                    f"http://localhost:8000/api/devices/{device_id}/point_cloud/{path}",
+                ) as response:
                     if response.status == 200:
                         result = await response.json()
                         logger.info(f"✅ {'Activated' if enabled else 'Deactivated'} point cloud for device {device_id}")
