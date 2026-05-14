@@ -773,9 +773,22 @@ class RealSenseManager:
                                 points = None
                                 if stream_type == rs.stream.depth.name:
                                     frame_data = frames.get_depth_frame()
-                                    frame = (
-                                        rs.colorizer().colorize(frame_data).get_data()
-                                    )  # assuming no throw if 'not frame'
+                                    if not frame_data:
+                                        continue
+                                    colorized = rs.colorizer().colorize(frame_data)
+                                    raw = np.asanyarray(colorized.get_data())
+                                    h, w = colorized.get_height(), colorized.get_width()
+                                    if raw.ndim == 1:
+                                        if raw.size == h * w * 3:
+                                            frame = raw.reshape((h, w, 3))
+                                        elif raw.size == h * w * 4:
+                                            frame = raw.reshape((h, w, 4))
+                                        elif raw.size == h * w * 2:
+                                            frame = raw.reshape((h, w, 2))
+                                        else:
+                                            continue
+                                    else:
+                                        frame = raw
                                     if self.is_pointcloud_enabled.get(device_id, False):
                                         points = self.pc.calculate(frame_data)
                                 elif stream_type == rs.stream.color.name:
@@ -856,16 +869,12 @@ class RealSenseManager:
                                     verts = (
                                         np.asanyarray(v).view(np.float32).reshape(-1, 3)
                                     )  # xyz
-                                    
-                                    # Safely filter out values where z < 0.03
                                     try:
                                         if safe_len(verts) > 0:
-                                            mask = verts[:, 2] >= 0.03
-                                            verts = verts[mask]
+                                            finite = np.isfinite(verts).all(axis=1)
+                                            verts = verts[finite]
                                     except Exception as filter_error:
                                         print(f"❌ Error filtering vertices: {filter_error}")
-                                        # Keep original vertices if filtering fails
-                                        pass
                                     # texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
                                     
                                     # Debug logging to see what we're storing

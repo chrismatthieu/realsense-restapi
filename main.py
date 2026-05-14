@@ -94,9 +94,13 @@ if __name__ == "__main__":
         server = uvicorn.Server(config)
         await server.serve()
         
-        # Cleanup
+        # Cleanup: disconnect client first so aiohttp session closes, then cancel task
         await stop_robot_websocket_client()
-        robot_task.cancel()
+        try:
+            robot_task.cancel()
+            await robot_task
+        except asyncio.CancelledError:
+            pass
     
     try:
         asyncio.run(start_services())

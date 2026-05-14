@@ -30,6 +30,7 @@ const PointCloudDemo = () => {
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef(0);
   const hasInitializedCameraRef = useRef(false);
+  const lastCameraDeviceIdRef = useRef(null);
 
   const logMessage = useCallback((message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -39,13 +40,28 @@ const PointCloudDemo = () => {
   const discoverRobots = async () => {
     try {
       logMessage('🔍 Discovering available robots...');
-      const availableRobots = await cloudSignalingService.getAvailableRobots();
-      setRobots(availableRobots);
-      logMessage(`✅ Found ${availableRobots.length} robot(s): ${availableRobots.map(r => r.robotId).join(', ')}`);
+      const base = process.env.REACT_APP_CLOUD_URL || 'http://localhost:3001';
+      const res = await fetch(`${base}/robots`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const list = await res.json();
+      const arr = Array.isArray(list) ? list : [];
+      setRobots(arr);
+      logMessage(`✅ Found ${arr.length} robot(s): ${arr.map((r) => r.robotId).join(', ')}`);
     } catch (error) {
       logMessage(`❌ Failed to discover robots: ${error.message}`);
     }
   };
+
+  /** RealSense serial from selected robot row (not the same as robot id string). */
+  const getSelectedRobotMeta = useCallback(() => {
+    const r = robots.find((x) => x.robotId === selectedRobot);
+    if (!r || !r.deviceInfo?.deviceId) {
+      return { robotId: null, deviceId: null };
+    }
+    return { robotId: r.robotId, deviceId: r.deviceInfo.deviceId };
+  }, [robots, selectedRobot]);
 
   const connectToCloud = async () => {
     try {
@@ -162,9 +178,16 @@ const PointCloudDemo = () => {
       return;
     }
 
+    const robot = robots.find((r) => r.robotId === selectedRobot);
+    const cameraDeviceId = robot?.deviceInfo?.deviceId;
+    if (!robot || !cameraDeviceId) {
+      logMessage('❌ Selected robot has no camera deviceId — pick a robot from Discover Robots after connecting.');
+      return;
+    }
+    const robotId = robot.robotId;
+    lastCameraDeviceIdRef.current = cameraDeviceId;
+
     try {
-      const deviceId = selectedRobot.replace('robot-', '');
-      
       // Initialize Three.js if not already done
       if (!sceneRef.current) {
         initThreeJS();
@@ -184,10 +207,19 @@ const PointCloudDemo = () => {
       setPointCloudStatus('Activating...');
       logMessage('Starting 3D point cloud viewer...');
 
+      // Enable point cloud on the camera before WebRTC so depth metadata includes vertices as soon as the stream runs
+      try {
+        logMessage(`Enabling point cloud on camera ${cameraDeviceId}...`);
+        await cloudSignalingService.activatePointCloud(cameraDeviceId, true);
+        logMessage('Point cloud API activation requested');
+      } catch (e) {
+        logMessage(`Warning: point cloud activate failed (continuing): ${e.message}`);
+      }
+
       // Start a WebRTC session for depth stream to enable point cloud data
       try {
-        logMessage('Starting WebRTC depth stream session...');
-        const sessionData = await cloudSignalingService.createSession(selectedRobot, deviceId, ['depth']);
+        logMessage(`Starting WebRTC depth stream session (robot ${robotId}, camera ${cameraDeviceId})...`);
+        const sessionData = await cloudSignalingService.createSession(robotId, cameraDeviceId, ['depth']);
         const newSessionId = sessionData.sessionId;
         const offer = sessionData.offer;
         setSessionId(newSessionId);
@@ -220,6 +252,50 @@ const PointCloudDemo = () => {
           logMessage(`🧊 ICE connection state: ${pc.iceConnectionState}`);
         };
 
+        // Register before setRemoteDescription — the offer includes a server-created data channel,
+        // and ondatachannel can fire during negotiation.
+        pc.ondatachannel = (event) => {
+          const dataChannel = event.channel;
+          logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
+
+          if (dataChannel.label === 'pointcloud-data') {
+            logMessage('📡 WebRTC data channel opened for point cloud data');
+
+            dataChannel.onmessage = (ev) => {
+              try {
+                const data = JSON.parse(ev.data);
+                const preview = JSON.stringify(data).substring(0, 200);
+                logMessage(`📡 Raw data received: ${preview}...`);
+
+                if (data.type === 'heartbeat') {
+                  logMessage(`💓 Received heartbeat for session ${data.session_id}`);
+                  return;
+                }
+
+                if (data.type === 'pointcloud-data' && data.vertices) {
+                  if (data.chunk_info) {
+                    handleChunkedPointCloudData(data);
+                  } else {
+                    logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
+                    logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
+                    updatePointCloudWithData(data.vertices);
+                  }
+                }
+              } catch (err) {
+                logMessage(`❌ Error parsing data channel message: ${err.message}`);
+              }
+            };
+
+            dataChannel.onclose = () => {
+              logMessage('📡 WebRTC data channel closed');
+            };
+
+            dataChannel.onerror = (err) => {
+              logMessage(`❌ WebRTC data channel error: ${err.message || err}`);
+            };
+          }
+        };
+
         // Set remote description
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
@@ -227,21 +303,16 @@ const PointCloudDemo = () => {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
-                // Send answer via cloud server
+        // Send answer via cloud server
         logMessage(`Sending answer for session: ${newSessionId}`);
         await cloudSignalingService.sendAnswer(newSessionId, answer);
-        
-        // Activate point cloud processing
-        logMessage('Activating point cloud processing...');
-        await cloudSignalingService.activatePointCloud(deviceId, true);
-        logMessage('Point cloud processing activated');
 
-        // Setup WebRTC data channel listener
-        logMessage('Setting up WebRTC data channel listener...');
-        setupWebRTCDataChannel(newSessionId);
+        setPointCloudStatus('Waiting for 3D data…');
+        logMessage('✅ WebRTC negotiation complete; waiting for depth + data channel…');
 
+        logMessage('✅ WebRTC data channel handlers registered (negotiation complete)');
       } catch (error) {
-        logMessage(`Warning: ${error.message}`);
+        logMessage(`WebRTC / point cloud setup failed: ${error.message}`);
       }
 
       // Start animation loop
@@ -309,67 +380,50 @@ const PointCloudDemo = () => {
     });
   };
 
-  const setupWebRTCDataChannel = (sessionId) => {
-    try {
-      // Get the WebRTC peer connection from the ref
-      const peerConnection = peerConnectionRef.current;
-      
-      if (!peerConnection) {
-        logMessage('❌ No peer connection available for data channel');
+  /**
+   * Register before setRemoteDescription: the offer includes a datachannel from the robot,
+   * so ondatachannel can fire during setRemoteDescription and would be missed if hooked later.
+   */
+  const attachPointCloudDataChannelHandlers = (pc) => {
+    pc.ondatachannel = (event) => {
+      const dataChannel = event.channel;
+      logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
+
+      if (dataChannel.label !== 'pointcloud-data') {
         return;
       }
 
-      // Listen for data channel from the server
-      peerConnection.ondatachannel = (event) => {
-        const dataChannel = event.channel;
-        logMessage(`📡 Data channel received: ${dataChannel.label} (state: ${dataChannel.readyState})`);
-        
-        if (dataChannel.label === 'pointcloud-data') {
-          logMessage('📡 WebRTC data channel opened for point cloud data');
-          
-          dataChannel.onmessage = (event) => {
-            try {
-              const data = JSON.parse(event.data);
-              logMessage(`📡 Raw data received: ${JSON.stringify(data).substring(0, 200)}...`);
-              
-              // Handle heartbeat messages to keep connection alive
-              if (data.type === 'heartbeat') {
-                logMessage(`💓 Received heartbeat for session ${data.session_id}`);
-                return;
-              }
-              
-              if (data.type === 'pointcloud-data' && data.vertices) {
-                // Check if this is a chunked message
-                if (data.chunk_info) {
-                  // Handle chunked point cloud data
-                  handleChunkedPointCloudData(data);
-                } else {
-                  // Handle single message (small data)
-                  logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
-                  logMessage(`📡 Data sample: ${JSON.stringify(data.vertices.slice(0, 3))}`);
-                  updatePointCloudWithData(data.vertices);
-                }
-              }
-            } catch (error) {
-              logMessage(`❌ Error parsing data channel message: ${error.message}`);
+      logMessage('📡 WebRTC data channel opened for point cloud data');
+
+      dataChannel.onmessage = (msgEvent) => {
+        try {
+          const data = JSON.parse(msgEvent.data);
+
+          if (data.type === 'heartbeat') {
+            return;
+          }
+
+          if (data.type === 'pointcloud-data' && data.vertices) {
+            if (data.chunk_info) {
+              handleChunkedPointCloudData(data);
+            } else {
+              logMessage(`📡 Received point cloud data: ${data.vertices.length} vertices`);
+              updatePointCloudWithData(data.vertices);
             }
-          };
-
-          dataChannel.onclose = () => {
-            logMessage('📡 WebRTC data channel closed');
-          };
-
-          dataChannel.onerror = (error) => {
-            logMessage(`❌ WebRTC data channel error: ${error.message}`);
-          };
+          }
+        } catch (error) {
+          logMessage(`❌ Error parsing data channel message: ${error.message}`);
         }
       };
 
-      logMessage('✅ WebRTC data channel setup complete');
+      dataChannel.onclose = () => {
+        logMessage('📡 WebRTC data channel closed');
+      };
 
-    } catch (error) {
-      logMessage(`❌ Error setting up WebRTC data channel: ${error.message}`);
-    }
+      dataChannel.onerror = (error) => {
+        logMessage(`❌ WebRTC data channel error: ${error.message || error}`);
+      };
+    };
   };
 
   const updatePointCloudWithData = (vertices) => {
@@ -486,8 +540,15 @@ const PointCloudDemo = () => {
       return;
     }
 
+    const cameraDeviceId =
+      robots.find((r) => r.robotId === selectedRobot)?.deviceInfo?.deviceId ||
+      lastCameraDeviceIdRef.current;
+    if (!cameraDeviceId) {
+      logMessage('❌ No camera deviceId for reset');
+      return;
+    }
+
     try {
-      const deviceId = selectedRobot.replace('robot-', '');
       logMessage('Resetting device...');
       
       // Close WebRTC session if exists
@@ -502,7 +563,7 @@ const PointCloudDemo = () => {
       
       // Deactivate point cloud processing
       try {
-        await cloudSignalingService.activatePointCloud(deviceId, false);
+        await cloudSignalingService.activatePointCloud(cameraDeviceId, false);
         logMessage('Deactivated point cloud processing');
       } catch (error) {
         logMessage(`Warning: ${error.message}`);
@@ -563,8 +624,12 @@ const PointCloudDemo = () => {
     
         // Also deactivate point cloud processing
         logMessage('Deactivating point cloud processing...');
-        const deviceId = selectedRobot.replace('robot-', '');
-        await cloudSignalingService.activatePointCloud(deviceId, false);
+        const cameraDeviceId =
+          robots.find((r) => r.robotId === selectedRobot)?.deviceInfo?.deviceId ||
+          lastCameraDeviceIdRef.current;
+        if (cameraDeviceId) {
+          await cloudSignalingService.activatePointCloud(cameraDeviceId, false);
+        }
         logMessage('Point cloud processing deactivated');
     
         // Wait a moment for cleanup to complete
@@ -613,12 +678,11 @@ const PointCloudDemo = () => {
       }
       
       // Cleanup on unmount
-      if (selectedRobot) {
-        const deviceId = selectedRobot.replace('robot-', '');
-        // Clean up any active streams
+      if (lastCameraDeviceIdRef.current) {
+        const did = lastCameraDeviceIdRef.current;
         try {
-          cloudSignalingService.stopDeviceStream(deviceId);
-          cloudSignalingService.activatePointCloud(deviceId, false);
+          cloudSignalingService.stopDeviceStream(did);
+          cloudSignalingService.activatePointCloud(did, false);
         } catch (error) {
           // Ignore cleanup errors on unmount
         }

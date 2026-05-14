@@ -540,7 +540,7 @@ class RobotWebSocketClient:
         """Handle point cloud activation request."""
         try:
             device_id = data.get('deviceId')
-            enabled = data.get('enabled', True)
+            enabled = data.get('enabled', data.get('activate', True))
             logger.info(f"📡 {'Activating' if enabled else 'Deactivating'} point cloud for device {device_id}")
             
             # Activate/deactivate point cloud via RealSense manager
@@ -655,13 +655,27 @@ async def start_robot_websocket_client():
     await robot_client.connect()
 
 async def stop_robot_websocket_client():
-    """Stop the robot WebSocket client"""
+    """Stop the robot WebSocket client and close aiohttp session to avoid 'Unclosed client session' warning."""
     global robot_client
-    
-    if robot_client and robot_client.sio:
+
+    if not robot_client:
+        return
+    if robot_client.sio:
         logger.info("🛑 Stopping robot WebSocket client")
-        await robot_client.sio.disconnect()
+        try:
+            await robot_client.sio.disconnect()
+        except Exception as e:
+            logger.debug("Disconnect: %s", e)
         robot_client.connected = False
+        # Explicitly close engineio's aiohttp session (avoids "Unclosed client session" on shutdown)
+        eio = getattr(robot_client.sio, "eio", None)
+        if eio is not None:
+            http = getattr(eio, "http", None)
+            if http is not None and not getattr(http, "closed", True):
+                try:
+                    await http.close()
+                except Exception:
+                    pass
 
 # For testing
 if __name__ == "__main__":

@@ -199,7 +199,7 @@
         <div class="controls">
             <div class="control-group">
                 <label for="apiUrl">API URL:</label>
-                <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="Enter API URL">
+                <input type="text" id="apiUrl" placeholder="Enter API URL">
             </div>
             <div class="control-group">
                 <label for="deviceId">Device ID:</label>
@@ -260,6 +260,12 @@
         let isViewerRunning = false;
         let frameCount = 0;
         let lastTime = performance.now();
+
+        // Default API URL to same host as page (so remote clients use server IP, not localhost)
+        (function setDefaultApiUrl() {
+            const el = document.getElementById('apiUrl');
+            if (el && !el.value) el.value = window.location.protocol + '//' + window.location.host + '/api';
+        })();
 
         // Initialize Three.js scene
         function initThreeJS() {

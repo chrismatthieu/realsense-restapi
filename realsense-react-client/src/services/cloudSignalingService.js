@@ -231,7 +231,7 @@ class CloudSignalingService {
     }
 
     console.log(`🎯 ${activate ? 'Activating' : 'Deactivating'} point cloud for device ${deviceId}`);
-    this.socket.emit('activate-pointcloud', { deviceId, activate });
+    this.socket.emit('activate-pointcloud', { deviceId, enabled: activate, activate });
   }
 
   startDeviceStream(deviceId, streamConfigs) {
