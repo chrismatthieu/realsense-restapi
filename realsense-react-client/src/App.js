@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import WebRTCDemo from './pages/WebRTCDemo';
 import PointCloudDemo from './pages/PointCloudDemo';
+import ApiDocsPage from './pages/ApiDocsPage';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
             <div className="nav-links">
               <Link to="/" className="nav-link">WebRTC Demo</Link>
               <Link to="/pointcloud" className="nav-link">3D Point Cloud</Link>
+              <Link to="/api-docs" className="nav-link">API Docs</Link>
             </div>
           </div>
         </nav>
@@ -24,6 +26,7 @@ function App() {
           <Routes>
             <Route path="/" element={<WebRTCDemo />} />
             <Route path="/pointcloud" element={<PointCloudDemo />} />
+            <Route path="/api-docs" element={<ApiDocsPage />} />
           </Routes>
         </main>
       </div>

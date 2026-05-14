@@ -251,3 +251,54 @@ body {
     flex-direction: column;
   }
 }
+
+/* OpenAPI / Swagger (ApiDocsPage) */
+.main-content:has(.api-docs-page) {
+  max-width: min(96vw, 1400px);
+}
+
+.api-docs-page {
+  max-width: none;
+}
+
+.api-docs-header {
+  margin-bottom: 1rem;
+}
+
+.api-docs-header p {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+.api-docs-header a {
+  color: #5a67d8;
+  word-break: break-all;
+}
+
+.api-docs-hint {
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.api-docs-hint code {
+  background: #f0f0f0;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.swagger-ui-wrap {
+  min-height: calc(100vh - 240px);
+  background: #fff;
+  border-radius: 12px;
+  overflow: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.swagger-ui-wrap .swagger-ui {
+  border: none;
+}
+
+.swagger-ui-wrap .swagger-ui .wrapper {
+  padding: 1rem 1.25rem 2rem;
+}
